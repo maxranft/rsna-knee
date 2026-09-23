@@ -1,0 +1,14 @@
+{
+  "id": "maxranft/rsna-knee-dicom-survey",
+  "title": "rsna-knee-dicom-survey",
+  "code_file": "survey.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "competition_sources": ["rsna-knee-abnormality-detection"],
+  "dataset_sources": [],
+  "kernel_sources": []
+}

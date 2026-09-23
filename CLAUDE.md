@@ -20,6 +20,7 @@ When proposing work, say which of S1–S4 it serves. If it serves none, question
 
 ## Read first
 - [docs/competition.md](docs/competition.md) — rules, metric (including the efficiency prize), data layout, deadlines.
+- [docs/data.md](docs/data.md) — what the data actually contains: 58 gold studies, series coverage, report languages, DICOM survey.
 - [docs/labels.md](docs/labels.md) — the 12 targets: MRI signs, best series, report phrasing, correlations, series-slot plan.
 - [docs/plan.md](docs/plan.md) — decisions so far: all-cloud compute, model size, training approach, order of work.
 - [reference/STUDY.md](reference/STUDY.md) — what the RSNA 2024 lumbar top-9 did and what ports to the knee.

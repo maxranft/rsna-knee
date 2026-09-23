@@ -27,7 +27,7 @@ Submission `submission.csv` has the columns:
 
 ## Data (569.76 GB, 819,640 files)
 - **`train.csv`:** `StudyInstanceUID`, `Report` (free text, **multilingual**), plus the 12 labels. **Only a small subset of studies has labels**; the rest have only the report.
-- **`train_series.csv`:** `StudyInstanceUID`, `SeriesInstanceUID`, and the flags `Fluid_Sensitive`, `Fat_Suppression` and `Anatomical_Plane` (Sagittal / Coronal / Axial). Fluid-sensitive and fat-suppression usually go together, but not always.
+- **`train_series.csv`:** `StudyInstanceUID`, `SeriesInstanceUID`, and the flags `Fluid_Sensitive`, `Fat_Suppression` and `Anatomical_Plane` (Sagittal / Coronal / Axial). The two flags are identical on every training row (checked 2026-09-23, see data.md).
 - **`train_series/<study>/<series>/<SOP>.dcm`:** one slice per file.
   - Slices per series: median 30, usually 20–45, with a tail up to a few hundred.
   - Mixed transfer syntaxes: uncompressed Explicit/Implicit VR, **JPEG Lossless, JPEG 2000**.
