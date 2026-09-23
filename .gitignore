@@ -1,0 +1,9 @@
+.venv/
+reference/code/
+data/
+*.dcm
+*.npy
+*.h5
+__pycache__/
+.DS_Store
+docs/history/*.zip
