@@ -34,17 +34,16 @@ QUESTIONS = {
 }
 LABELS = list(QUESTIONS)[:12]
 
-# Alternative wordings under test, keyed "<label>@<variant>"; the eval scores each against its base label.
-# v2 targets the weak v1 labels (docs/labeller.md). Keep this list short: best-of-many on 58 studies overfits.
+# Alternative wordings, keyed "<label>@<variant>"; the eval scores each against its base label.
+# Tried and rejected in gold-v2 (all lower AUC, gold uses strict definitions): Effusion@any, Synovitis@broad,
+# Lateral OA@any, PF OA@any, Contusion@oedema. See docs/labeller.md.
 QUESTIONS.update({
+    # adopted in gold-v2 (+0.107): gold counts small effusions as negative. Training uses this column for Effusion.
     "Effusion@moderate": "Does the report describe a moderate or large joint effusion (more than a small, minimal, trace or physiological amount of fluid)?",
-    "Effusion@any": "Does the report mention any joint effusion or increased joint fluid, even a small amount?",
-    "Synovitis@broad": "Does the report describe any synovial abnormality: synovitis, synovial thickening or proliferation, effusion-synovitis, oedema or inflammation of Hoffa's fat pad, or debris in the joint fluid?",
-    "Lateral OA@any": "Does the report describe any cartilage damage (chondromalacia of any grade, thinning, fissuring or defect), osteophytes or degenerative change in the lateral femorotibial compartment?",
-    "PF OA@any": "Does the report describe any cartilage damage (chondromalacia of any grade, thinning, fissuring or defect), osteophytes or degenerative change of the patella or the femoral trochlea?",
+    # +0.031, within noise on 58 studies: carried as a column, not adopted
     "ACL@abnormal": "Is the anterior cruciate ligament (ACL) abnormal in the report: torn (partial or complete), sprained, insufficient, or a reconstructed ACL graft?",
-    "Contusion@oedema": "Does the report describe bone marrow oedema or a bone bruise anywhere in the knee, whatever the cause?",
 })
+ADOPTED = {"Effusion": "Effusion@moderate"}  # label -> column the trainer should use (--label-map)
 
 
 def base_label(key):
