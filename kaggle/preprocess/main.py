@@ -1,4 +1,4 @@
-# ---- kernel entry point (appended to src/knee/preprocess.py by scripts/build_preprocess.py) ----
+# ---- kernel entry point (appended to src/knee/preprocess.py by scripts/build_kernels.py) ----
 import json
 import os
 import time
