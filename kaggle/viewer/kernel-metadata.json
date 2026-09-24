@@ -1,0 +1,14 @@
+{
+  "id": "maxranft/rsna-knee-study-viewer",
+  "title": "rsna-knee-study-viewer",
+  "code_file": "viewer.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "competition_sources": ["rsna-knee-abnormality-detection"],
+  "dataset_sources": [],
+  "kernel_sources": []
+}
