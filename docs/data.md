@@ -46,9 +46,9 @@ Kaggle. The DICOM findings come from the `rsna-knee-dicom-survey` kernel ([../ka
 
 CV = AUC on the **pooled out-of-fold predictions for the 58 gold studies**.
 
-## Validation (open question for Max)
+## Validation (decided 2026-09-23: both, gold decides)
 The rule is "validate only on gold". With 58 gold studies, a CV difference below about 0.02 macro AUC is noise.
-Proposal: keep gold as the **final arbiter**, but also report AUC against the (validated) report labels on the
+Decision: keep gold as the **final arbiter**, but also report AUC against the (validated) report labels on the
 4,349 out-of-fold report-only studies. That is a large, lower-variance signal for choosing between models.
 Use it only after the labeller's agreement with gold is measured.
 

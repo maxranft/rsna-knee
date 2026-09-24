@@ -49,7 +49,7 @@ Smaller edges (cheap, adopt when relevant):
 
 ## Training approach (what changes vs the DR/APTOS project)
 - **Loss:** 12 sigmoid outputs with BCE. Not softmax, not QWK.
-- **Validate only on gold labels.** Check the report labeller against gold labels for each label first.
+- **Validate on both, gold decides.** Gold macro AUC (58 studies, pooled OOF) is the final arbiter; macro AUC against the report labels on the 4,349 OOF report-only studies is the steadier signal for model selection. Check the report labeller against gold per label first.
 - Train on gold labels plus soft report-derived labels, then fine-tune on gold. Clean noisy report labels with out-of-fold predictions (lumbar 2nd place's confident-learning filter).
 - **Architecture:** slice → series → study.
   - 2.5D input: neighbouring slices as channels.

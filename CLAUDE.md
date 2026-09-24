@@ -27,10 +27,11 @@ When proposing work, say which of S1–S4 it serves. If it serves none, question
 - [docs/landscape.md](docs/landscape.md) — clinical AI products and open resources.
 
 ## Ground rules (settled — don't relitigate)
-- **Validate only on gold labels.** Report-derived labels are for training only.
+- **Validate on both, gold decides (2026-09-23).** Every run reports (a) macro AUC on the pooled OOF predictions for the 58 gold studies, the final arbiter, and (b) macro AUC against the report-derived labels on the 4,349 OOF report-only studies, a lower-variance signal for choosing between models. When they disagree, gold wins. Gold differences below about 0.02 are noise.
 - **Never flip left/right** unless the knee has been canonicalised *and* Medial↔Lateral labels (Meniscus, OA) are swapped at the same time. Lumbar 7th place lost score to exactly this bug.
 - AUC is rank-based: no calibration or threshold post-processing. Rank-average ensembles.
 - Keep report text inside Kaggle (open-weights LLM on Kaggle). Don't send it to external APIs unless the rules are confirmed to allow it.
+  **This includes Claude sessions:** never print report text or evidence snippets, and never view MRI images in a Claude session. Anything shown there goes to Anthropic's API. Work from aggregates and metrics; Max looks at reports and images directly (Kaggle viewer notebook).
 - Small models first (about 6–15 M parameters). Get an end-to-end baseline submitted before improving anything.
 - One change at a time on fixed folds. Log every run in [experiments.md](experiments.md) (date, change, CV macro AUC, weakest 3 labels, runtime).
 - Keep two final submissions in mind: **accurate** (main LB) and **efficient** (efficiency track).
