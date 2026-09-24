@@ -11,14 +11,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 N_SHARDS = 3
 
-KERNELS = [  # (name, module, entry point, {placeholder: value}, gpu, internet)
+SHARD_KERNELS = [f"maxranft/rsna-knee-preprocess-shard{k}" for k in range(N_SHARDS)]
+KERNELS = [  # (name, module, entry point, {placeholder: value}, gpu, internet, kernel_sources)
     *[(f"rsna-knee-preprocess-shard{k}", "src/knee/preprocess.py", "kaggle/preprocess/main.py",
-       {"{shard}": str(k), "{n_shards}": str(N_SHARDS)}, False, False) for k in range(N_SHARDS)],
+       {"{shard}": str(k), "{n_shards}": str(N_SHARDS)}, False, False, []) for k in range(N_SHARDS)],
     *[(f"rsna-knee-labeller-{mode}", "src/knee/report_labeller.py", "kaggle/labeller/main.py",
-       {"{mode}": mode}, True, True) for mode in ("gold", "all")],
+       {"{mode}": mode}, True, True, []) for mode in ("gold", "all")],
+    ("rsna-knee-features-dinov2s", "src/knee/features.py", "kaggle/features/main.py", {}, True, True, SHARD_KERNELS),
 ]
 
-for name, module, entry, subs, gpu, internet in KERNELS:
+for name, module, entry, subs, gpu, internet, sources in KERNELS:
     code = (ROOT / module).read_text() + "\n\n" + (ROOT / entry).read_text()
     for k, v in subs.items():
         code = code.replace(k, v)
@@ -29,6 +31,6 @@ for name, module, entry, subs, gpu, internet in KERNELS:
         "id": f"maxranft/{name}", "title": name, "code_file": "kernel.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": gpu, "enable_tpu": False,
         "enable_internet": internet, "competition_sources": ["rsna-knee-abnormality-detection"],
-        "dataset_sources": [], "kernel_sources": [],
+        "dataset_sources": [], "kernel_sources": sources,
     }, indent=2))
     print("built", d.relative_to(ROOT), "(GPU: push with --accelerator NvidiaTeslaT4)" if gpu else "")
