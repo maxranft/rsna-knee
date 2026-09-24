@@ -18,10 +18,14 @@ KERNELS = [  # (name, module, entry point, {placeholder: value}, gpu, internet, 
     *[(f"rsna-knee-labeller-{mode}", "src/knee/report_labeller.py", "kaggle/labeller/main.py",
        {"{mode}": mode}, True, True, []) for mode in ("gold", "all")],
     ("rsna-knee-features-dinov2s", "src/knee/features.py", "kaggle/features/main.py", {}, True, True, SHARD_KERNELS),
+    ("rsna-knee-assets", "src/knee/features.py", "kaggle/assets/main.py", {}, False, True, []),
+    ("rsna-knee-submit", ["src/knee/preprocess.py", "src/knee/features.py", "src/knee/head.py"], "kaggle/submit/main.py",
+     {}, True, False, ["maxranft/rsna-knee-assets"]),  # + dataset maxranft/rsna-knee-heads, added below
 ]
 
-for name, module, entry, subs, gpu, internet, sources in KERNELS:
-    code = (ROOT / module).read_text() + "\n\n" + (ROOT / entry).read_text()
+for name, modules, entry, subs, gpu, internet, sources in KERNELS:
+    modules = [modules] if isinstance(modules, str) else modules  # glued in order; names must not clash
+    code = "\n\n".join((ROOT / m).read_text() for m in modules) + "\n\n" + (ROOT / entry).read_text()
     for k, v in subs.items():
         code = code.replace(k, v)
     d = ROOT / "build" / name
@@ -31,6 +35,6 @@ for name, module, entry, subs, gpu, internet, sources in KERNELS:
         "id": f"maxranft/{name}", "title": name, "code_file": "kernel.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": gpu, "enable_tpu": False,
         "enable_internet": internet, "competition_sources": ["rsna-knee-abnormality-detection"],
-        "dataset_sources": [], "kernel_sources": sources,
+        "dataset_sources": ["maxranft/rsna-knee-heads"] if name == "rsna-knee-submit" else [], "kernel_sources": sources,
     }, indent=2))
     print("built", d.relative_to(ROOT), "(GPU: push with --accelerator NvidiaTeslaT4)" if gpu else "")

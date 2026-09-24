@@ -105,6 +105,7 @@ def main():
                 sched.step()
                 tot += loss.item() * len(y)
             print(f"fold {f} epoch {ep + 1}/{args.epochs} loss {tot / len(tr):.4f} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+        torch.save(model.state_dict(), out / f"head_fold{f}.pt")
         model.eval()
         preds = []
         with torch.no_grad():
@@ -113,6 +114,8 @@ def main():
         oof.append(pd.DataFrame(np.concatenate(preds), columns=LABELS).assign(StudyInstanceUID=va, fold=f))
     oof = pd.concat(oof)
     oof.to_csv(out / "oof.csv", index=False)
+    (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers,
+                                                 "labels": LABELS, "label_map": label_map, "feats": str(fd)}, indent=1))
 
 
     # ---- metrics ----

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-SLOTS = ["sag_fs", "cor_fs", "ax_fs", "t1"]
+SLOT_NAMES = ["sag_fs", "cor_fs", "ax_fs", "t1"]  # same order as preprocess.SLOTS
 
 
 def fourier(depth, n=8):
@@ -25,7 +25,7 @@ class Head(nn.Module):
     def __init__(self, tokens=17, dim=384, d=256, n_labels=12, layers=1, heads=4, drop=0.1):
         super().__init__()
         self.proj = nn.Sequential(nn.LayerNorm(tokens * dim), nn.Dropout(drop), nn.Linear(tokens * dim, d), nn.GELU())
-        self.slot_emb = nn.Embedding(len(SLOTS), d)
+        self.slot_emb = nn.Embedding(len(SLOT_NAMES), d)
         self.depth = nn.Linear(16, d)
         layer = nn.TransformerEncoderLayer(d, heads, 2 * d, drop, batch_first=True, norm_first=True)
         self.tf = nn.TransformerEncoder(layer, layers, enable_nested_tensor=False)
@@ -77,7 +77,7 @@ class Studies(torch.utils.data.Dataset):
         for r in rows:
             a = np.asarray(feats[r["shard"]][r["start"]:r["start"] + r["length"]])
             xs.append(a)
-            slots.append(np.full(len(a), SLOTS.index(r["slot"])))
+            slots.append(np.full(len(a), SLOT_NAMES.index(r["slot"])))
             depths.append(np.linspace(0, 1, len(a)))
         return (torch.from_numpy(np.concatenate(xs)), torch.from_numpy(np.concatenate(slots)).long(),
                 torch.from_numpy(np.concatenate(depths)).float(), torch.as_tensor(self.targets[u], dtype=torch.float32))

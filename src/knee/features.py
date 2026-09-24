@@ -12,10 +12,12 @@ MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
-def load_encoder(device="cuda", pretrained=True, checkpoint=None):
+def load_encoder(device="cuda", weights=None):
+    """weights: path to a saved state_dict (offline submission); None downloads the pretrained weights."""
     import timm
-    kw = {"pretrained_cfg_overlay": {"file": checkpoint}} if checkpoint else {}
-    m = timm.create_model(ENCODER, pretrained=pretrained, num_classes=0, img_size=IMG, **kw)
+    m = timm.create_model(ENCODER, pretrained=weights is None, num_classes=0, img_size=IMG)
+    if weights:
+        m.load_state_dict(torch.load(weights, map_location="cpu"))
     return m.eval().half().to(device)
 
 

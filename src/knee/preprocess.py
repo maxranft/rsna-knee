@@ -19,6 +19,7 @@ MM_PER_PX = 0.7  # 256 px -> 179 mm; field of view median is 160 mm
 MAX_SLICES = 40
 PCT = (0.5, 99.5)
 IO_THREADS = 8
+cv2.setNumThreads(1)  # parallelism comes from worker processes; cv2 threads can deadlock after fork
 
 SLOTS = [  # (name, [(plane, fluid_sensitive), ...] in order of preference)
     ("sag_fs", [("Sagittal", 1)]),
