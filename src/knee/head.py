@@ -35,13 +35,15 @@ class Head(nn.Module):
         self.w = nn.Parameter(torch.zeros(n_labels, d))
         self.b = nn.Parameter(torch.zeros(n_labels))
 
-    def forward(self, x, slot, depth, pad):
-        """x [B, N, T, C] (float16 ok), slot [B, N] long, depth [B, N] float, pad [B, N] bool (True = padding)."""
+    def forward(self, x, slot, depth, pad, return_attn=False):
+        """x [B, N, T, C] (float16 ok), slot [B, N] long, depth [B, N] float, pad [B, N] bool (True = padding).
+        return_attn: also return each label's attention over slices [B, n_labels, N] (the review tool's 'where it looked')."""
         h = self.proj(x.flatten(2).float()) + self.slot_emb(slot) + self.depth(fourier(depth))
         h = self.tf(h, src_key_padding_mask=pad)
         q = self.queries.unsqueeze(0).expand(len(h), -1, -1)
-        z, _ = self.pool(q, h, h, key_padding_mask=pad)
-        return (self.norm(z) * self.w).sum(-1) + self.b  # [B, n_labels]
+        z, attn = self.pool(q, h, h, key_padding_mask=pad, need_weights=return_attn)
+        logits = (self.norm(z) * self.w).sum(-1) + self.b  # [B, n_labels]
+        return (logits, attn) if return_attn else logits
 
 
 class Studies(torch.utils.data.Dataset):
