@@ -52,9 +52,35 @@ Proposal: keep gold as the **final arbiter**, but also report AUC against the (v
 4,349 out-of-fold report-only studies. That is a large, lower-variance signal for choosing between models.
 Use it only after the labeller's agreement with gold is measured.
 
-## DICOM (survey kernel)
-_Pending: surviving tags, transfer syntaxes, slices per series, decode speed._
-From the first smoke test on one test series:
-- `Laterality`, `BodyPartExamined`, `SeriesDescription`, `Manufacturer` and `MagneticFieldStrength`,
-  plus the full geometry (`ImagePositionPatient`, `ImageOrientationPatient`, `PixelSpacing`), all survive.
-- That series is 960×960 at 0.156 mm pixel spacing, with 3 mm slices.
+## DICOM (survey kernel, run 2026-09-23)
+Source: [../kaggle/dicom-survey/survey.py](../kaggle/dicom-survey/survey.py). Outputs are in `data/survey/` (git-ignored).
+The kernel listed all 24,371 series and read 4,428 headers (first and middle slice of every series in 400 random studies).
+- **819,078 slices.** Per series: median 30, IQR 25–34, max 320. 749 series (3%) have more than 80 slices,
+  mostly axial and sagittal (3D / thin-slice sequences), so the slot sampler must subsample them.
+  Kaggle mounts the data at `/kaggle/input/competitions/rsna-knee-abnormality-detection`.
+- **Every sampled file is uncompressed Explicit VR Little Endian.** There is no JPEG 2000 in the sample, despite the
+  competition page mentioning it. Decoding takes under 1 ms per slice with any plugin.
+  **I/O is the cost: about 14 ms median per file** from the Kaggle mount. Keep the JPEG plugins in the submission
+  anyway, in case the hidden test set differs.
+- **Throughput:** 218 files/s with 4 processes, cold I/O.
+  - The whole training set is about 1 h, so preprocessing fits in one CPU session.
+  - The test set, 4 slots with all slices, is about **12 min**, which is about 0.009 AUC on the efficiency score.
+  - Threads may do better than processes, since the work is I/O-bound. Try that in the preprocessing kernel.
+- **Laterality:** clean `L` or `R` tag in about **50% of studies**, conflicting (`L`+`R`, or `B`) in about 1.5%, missing in about 48%.
+  `ImageLaterality` never appears. So we need another source:
+  - **Train time:** the report, which usually says "right/left knee". Extract it in the S1 labeller.
+  - **Test time:** the tag where present, otherwise a small L/R classifier trained on the tagged half, or
+    anatomy (the fibular head is lateral). Canonicalisation only matters for the 4 Medial/Lateral labels. Until it
+    is solved, just **never flip**.
+- **Geometry:** pixel spacing median 0.31 mm (0.125–1.17); field of view median 160 mm (IQR 160–170); slice thickness
+  median 3 mm. Matrix sizes range from 256² to 1024², with 512² the most common.
+  So resample to a fixed mm grid (e.g. 160 mm → 256 px = 0.625 mm/px), not a fixed pixel count.
+- **Scanners:** Siemens, GE, Philips and Toshiba/Canon, with vendor names in several spellings, so normalise
+  them before using as metadata. Field strength: 1.5 T in about 60%, 3 T in about 37%.
+  `PatientPosition` is FFS whenever present.
+- **Tags worth using:** `SeriesDescription` (95%) for picking between duplicate series of the same type;
+  `RepetitionTime`/`EchoTime`/`InversionTime` for the sequence type; `RescaleSlope`/`Intercept`
+  (45%, Philips-style, so apply the modality LUT before normalising).
+  `NumberOfFrames` is present in 20% of headers, so **check for multi-frame files** before trusting file
+  count = slice count.
+  `BodyPartExamined` is unreliable (HEAD, BRAIN and ILEUM appear on knee studies).
