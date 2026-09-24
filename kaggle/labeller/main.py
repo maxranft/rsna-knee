@@ -51,13 +51,15 @@ res.to_csv(OUT / f"report_scores_{MODE}.csv", index=False)
 # ---- agreement with gold (AUC of report score vs gold label) ----
 g = res.merge(train.loc[gold_mask, ["StudyInstanceUID"] + LABELS], on="StudyInstanceUID", suffixes=("", "_gold"))
 metrics = {}
-for lab in LABELS:
-    y, s = g[f"{lab}_gold"].values, g[lab].values
-    metrics[lab] = {"auc": round(float(roc_auc_score(y, s)), 3), "pos": int(y.sum()),
+for key in [k for k in QUESTIONS if base_label(k) in LABELS]:  # base labels and their "@variant" wordings
+    y, s = g[f"{base_label(key)}_gold"].values, g[key].values
+    metrics[key] = {"auc": round(float(roc_auc_score(y, s)), 3), "pos": int(y.sum()),
                     "mean_score_pos": round(float(s[y == 1].mean()), 3),
                     "mean_score_neg": round(float(s[y == 0].mean()), 3),
                     "acc@0.5": round(float(((s > 0.5) == (y == 1)).mean()), 3)}
 metrics["macro_auc"] = round(float(np.mean([metrics[l]["auc"] for l in LABELS])), 4)
+metrics["variant_vs_base_auc"] = {k: round(metrics[k]["auc"] - metrics[base_label(k)]["auc"], 3)
+                                  for k in QUESTIONS if "@" in k}
 aux = [k for k in QUESTIONS if k.startswith("aux_")]
 metrics["aux_mean_score"] = {k: round(float(res[k].mean()), 3) for k in aux}
 metrics["aux_right_vs_left_decided"] = round(float(((res.aux_right_knee > 0.5) ^ (res.aux_left_knee > 0.5)).mean()), 3)

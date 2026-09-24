@@ -33,6 +33,22 @@ QUESTIONS = {
     "aux_prior_surgery": "Does the report mention prior surgery on this knee (for example ligament reconstruction, meniscectomy, meniscal repair or arthroplasty)?",
 }
 LABELS = list(QUESTIONS)[:12]
+
+# Alternative wordings under test, keyed "<label>@<variant>"; the eval scores each against its base label.
+# v2 targets the weak v1 labels (docs/labeller.md). Keep this list short: best-of-many on 58 studies overfits.
+QUESTIONS.update({
+    "Effusion@moderate": "Does the report describe a moderate or large joint effusion (more than a small, minimal, trace or physiological amount of fluid)?",
+    "Effusion@any": "Does the report mention any joint effusion or increased joint fluid, even a small amount?",
+    "Synovitis@broad": "Does the report describe any synovial abnormality: synovitis, synovial thickening or proliferation, effusion-synovitis, oedema or inflammation of Hoffa's fat pad, or debris in the joint fluid?",
+    "Lateral OA@any": "Does the report describe any cartilage damage (chondromalacia of any grade, thinning, fissuring or defect), osteophytes or degenerative change in the lateral femorotibial compartment?",
+    "PF OA@any": "Does the report describe any cartilage damage (chondromalacia of any grade, thinning, fissuring or defect), osteophytes or degenerative change of the patella or the femoral trochlea?",
+    "ACL@abnormal": "Is the anterior cruciate ligament (ACL) abnormal in the report: torn (partial or complete), sprained, insufficient, or a reconstructed ACL graft?",
+    "Contusion@oedema": "Does the report describe bone marrow oedema or a bone bruise anywhere in the knee, whatever the cause?",
+})
+
+
+def base_label(key):
+    return key.split("@")[0]
 MAX_REPORT_CHARS = 6000  # longest training report is 4,743 characters
 
 
