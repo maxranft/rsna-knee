@@ -46,9 +46,11 @@ QUESTIONS.update({
 ADOPTED = {"Effusion": "Effusion@moderate"}  # label -> column the trainer should use (--label-map)
 
 
+MAX_REPORT_CHARS = 6000  # longest training report is 4,743 characters
+
+
 def base_label(key):
     return key.split("@")[0]
-MAX_REPORT_CHARS = 6000  # longest training report is 4,743 characters
 
 
 def build_prompts(report, tokenizer):
