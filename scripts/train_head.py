@@ -22,6 +22,7 @@ from sklearn.metrics import roc_auc_score
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from knee.head import Head, Studies, collate  # noqa: E402
+from knee.progress import ProgressTracker  # noqa: E402
 
 LABELS = ["ACL", "MCL", "Medial Meniscus", "Lateral Meniscus", "Medial OA", "Lateral OA", "PF OA",
           "Effusion", "Synovitis", "Baker's", "Contusion", "Fracture"]
@@ -35,6 +36,19 @@ def aucs(oof, ids, truth):
             res[l] = round(float(roc_auc_score(y, o[l].values)), 4)
     return res
 
+
+def evaluate(model, dl, dev):
+    """-> (sigmoid predictions [n, 12] in dataset order, mean BCE against the training targets)."""
+    lossf = torch.nn.BCEWithLogitsLoss(reduction="sum")
+    model.eval()
+    preds, tot, n = [], 0.0, 0
+    with torch.no_grad():
+        for x, slot, depth, pad, y in dl:
+            logits = model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev))
+            tot += lossf(logits, y.to(dev)).item()
+            n += y.numel()
+            preds.append(torch.sigmoid(logits).cpu().numpy())
+    return np.concatenate(preds), tot / n
 
 
 def main():
@@ -52,6 +66,7 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--log", default="", help="append a row to experiments.md with this change description")
+    p.add_argument("--no-open", action="store_true", help="don't open the live progress.png in VS Code")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -65,6 +80,7 @@ def main():
     fd = Path(args.feats)
     index = pd.read_csv(fd / "index.csv")
     feats = {int(f.stem.split("shard")[1]): str(f) for f in sorted(fd.glob("feats_shard*.npy"))}
+    index = index[index.shard.isin(feats)]  # train on whichever shards are present (e.g. mid-download)
     T, C = np.load(next(iter(feats.values())), mmap_mode="r").shape[1:]
     folds = pd.read_csv(ROOT / "meta/folds.csv")
     train_csv = pd.read_csv(ROOT / "data/raw/train.csv", usecols=lambda c: c != "Report").set_index("StudyInstanceUID")
@@ -81,7 +97,10 @@ def main():
     # ---- train / predict per fold ----
     oof = []
     t0 = time.time()
-    for f in [int(x) for x in args.folds.split(",")]:
+    fold_list = [int(x) for x in args.folds.split(",")]
+    tracker = ProgressTracker(out, LABELS, fold_list, args.epochs, title=args.log or "test run", open_in_editor=not args.no_open)
+    print(f"live progress: {out / 'progress.png'}", flush=True)
+    for f in fold_list:
         tr = folds.StudyInstanceUID[folds.fold != f].tolist()
         va = folds.StudyInstanceUID[folds.fold == f].tolist()
         dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f), batch_size=args.bs,
@@ -104,14 +123,13 @@ def main():
                 opt.step()
                 sched.step()
                 tot += loss.item() * len(y)
-            print(f"fold {f} epoch {ep + 1}/{args.epochs} loss {tot / len(tr):.4f} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+            preds, val_loss = evaluate(model, dl_va, dev)
+            fold_oof = pd.DataFrame(preds, columns=LABELS).assign(StudyInstanceUID=va)
+            va_rep = [u for u in va if u not in gold_ids]
+            tracker.log(f, ep + 1, train_loss=tot / len(tr), val_loss=val_loss,
+                        val_auc=aucs(fold_oof, va_rep, (report > 0.5).astype(int)))
         torch.save(model.state_dict(), out / f"head_fold{f}.pt")
-        model.eval()
-        preds = []
-        with torch.no_grad():
-            for x, slot, depth, pad, _ in dl_va:
-                preds.append(torch.sigmoid(model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev))).cpu().numpy())
-        oof.append(pd.DataFrame(np.concatenate(preds), columns=LABELS).assign(StudyInstanceUID=va, fold=f))
+        oof.append(fold_oof.assign(fold=f))
     oof = pd.concat(oof)
     oof.to_csv(out / "oof.csv", index=False)
     (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers,
@@ -128,6 +146,7 @@ def main():
          "report_macro": round(float(np.mean(list(rep_auc.values()))), 4), "report": rep_auc,
          "n_gold": len(gold_eval), "n_report": len(rep_eval)}
     (out / "metrics.json").write_text(json.dumps(m, indent=1))
+    tracker.finish(gold_macro_pooled=m["gold_macro"], report_macro_pooled=m["report_macro"], n_gold=len(gold_eval))
     print(json.dumps(m, indent=1))
 
     if args.log:
