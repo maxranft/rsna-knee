@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Knee review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="where">
+      <span id="position">Loading…</span>
+      <div class="track" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
+    </div>
+    <form class="queue" id="queue-form">
+      <label>Review
+        <select id="q-mode">
+          <option value="disagree">biggest disagreements</option>
+          <option value="gold">gold studies only</option>
+          <option value="random">a random sample</option>
+        </select>
+      </label>
+      <label>for
+        <select id="q-label"><option value="">all findings</option></select>
+      </label>
+      <button type="submit" class="quiet">Load</button>
+    </form>
+    <p class="tally" id="tally"></p>
+  </header>
+
+  <main id="main">
+    <section class="viewer" aria-label="Images">
+      <div class="rail">
+        <nav class="series" id="series" aria-label="Series"></nav>
+        <p id="slice-caption"></p>
+        <button type="button" class="quiet" id="heat-toggle"><kbd>H</kbd> <span>Hide heat map</span></button>
+      </div>
+      <div class="stage" id="stage">
+        <div class="lightbox" id="lightbox">
+          <img id="slice" alt="">
+          <canvas id="heat" aria-hidden="true"></canvas>
+          <div class="pending" id="pending" hidden></div>
+        </div>
+      </div>
+      <figure class="strip">
+        <svg id="strip" role="img" aria-label="Evidence per slice"></svg>
+        <figcaption>Evidence per slice. <span class="sw present"></span>Above the line pushes toward present, <span class="sw absent"></span>below toward absent. Click a bar, use <kbd>←</kbd><kbd>→</kbd> and <kbd>↑</kbd><kbd>↓</kbd>, or scroll on the image to move.</figcaption>
+        <div class="tip" id="tip" hidden></div>
+      </figure>
+    </section>
+
+    <aside class="panel" aria-label="Decision">
+      <div class="panel-scroll">
+        <h1 id="question"></h1>
+        <dl class="opinions" id="opinions"></dl>
+        <section class="evidence">
+          <h2>What the model used</h2>
+          <p id="summary"></p>
+        </section>
+        <section class="report">
+          <div class="report-head">
+            <h2>Report</h2>
+            <button type="button" class="quiet" id="lang-toggle"><kbd>O</kbd> <span>Show original</span></button>
+          </div>
+          <p class="hits" id="hits"></p>
+          <div class="sentences" id="sentences"></div>
+        </section>
+      </div>
+      <div class="decide">
+        <button type="button" class="choice" id="accept"><kbd>A</kbd><span class="t"></span><span class="d"></span></button>
+        <button type="button" class="choice" id="deny"><kbd>D</kbd><span class="t"></span><span class="d"></span></button>
+        <div class="minor">
+          <button type="button" class="quiet" id="unsure"><kbd>U</kbd> Unsure</button>
+          <button type="button" class="quiet" id="skip"><kbd>S</kbd> Skip</button>
+          <button type="button" class="quiet" id="back"><kbd>B</kbd> Back</button>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <section class="done" id="done" hidden>
+    <h1>Queue finished</h1>
+    <p id="done-text"></p>
+    <p>Pick another queue at the top to keep going.</p>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

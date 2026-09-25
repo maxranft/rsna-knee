@@ -1,109 +1,183 @@
-"""Manual review: grade the model's predictions one (study, finding) at a time and record accept / deny.
+"""Review tool: grade the model's predictions one (study, finding) at a time, in the browser.
 
-    python scripts/review.py                       # latest run, biggest model-vs-label disagreements first
-    python scripts/review.py --queue gold          # only the 58 gold studies
-    python scripts/review.py --label "Lateral Meniscus" --n 20
-    python scripts/review.py --demo                # synthetic data, to try the controls
+    python scripts/review.py            # opens http://127.0.0.1:8765 (local only)
+    python scripts/review.py --demo     # synthetic data, to try the controls
 
-For each item the window shows
-  * the slice the model attended to most for that finding (its "reasoning": where it looked), with an attention
-    strip across every slice of every series. Click the strip, or use the arrow keys, to browse slices;
-  * the model's probability, the training label from the report labeller, and the gold label when there is one;
-  * the report text, which is what the training label was derived from.
-Keys: a accept (model is right) · d deny (model is wrong) · s skip · b back · arrows browse · q quit.
+Each item shows the slice with the model's strongest evidence (large), a heat map of where on that slice the
+evidence sits, an evidence strip across every slice of every series (up = toward present, down = toward absent),
+the model's probability next to the training label and the gold label, a plain-English summary of the evidence,
+and the report in English with the sentences about the finding highlighted.
 
-Decisions append to meta/reviews.csv (latest decision per study+finding wins); reviewed pairs leave the queue.
-Images and reports appear only in this local window. Never paste them into a chat or external tool.
-Stacks download from the preprocess kernels in the background (one batched call per shard) into data/stacks/.
+Evidence is occlusion on the study head: how much the finding's score (log-odds) drops when one slice is removed, and,
+for the slice on screen, when one of its 16 image regions is blanked (replaced by the slice's average region).
+It explains this model's decision; it is not a diagnosis.
+
+Decisions go to meta/reviews.csv with what they imply (the finding's true state, whether the model and the training
+label were right). Graded items leave the queue. Images and reports stay on this machine: never paste them into a chat.
 """
 import argparse
+import io
 import json
 import re
 import subprocess
 import sys
-import textwrap
 import threading
+import webbrowser
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
 import torch
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from knee.head import SLOT_NAMES, Head, Studies  # noqa: E402
 
+UI = Path(__file__).resolve().parent / "review_ui"
 LABELS = ["ACL", "MCL", "Medial Meniscus", "Lateral Meniscus", "Medial OA", "Lateral OA", "PF OA",
           "Effusion", "Synovitis", "Baker's", "Contusion", "Fracture"]
 SLOT_TITLES = {"sag_fs": "Sagittal fluid-sensitive", "cor_fs": "Coronal fluid-sensitive",
                "ax_fs": "Axial fluid-sensitive", "t1": "T1 (not fluid-sensitive)"}
+SLOT_INLINE = {"sag_fs": "sagittal fluid-sensitive", "cor_fs": "coronal fluid-sensitive",
+               "ax_fs": "axial fluid-sensitive", "t1": "T1"}  # mid-sentence form
+QUESTIONS = {
+    "ACL": ("Is the anterior cruciate ligament injured?", "ACL injury"),
+    "MCL": ("Is the medial collateral ligament injured?", "MCL injury"),
+    "Medial Meniscus": ("Is the medial meniscus torn?", "medial meniscus tear"),
+    "Lateral Meniscus": ("Is the lateral meniscus torn?", "lateral meniscus tear"),
+    "Medial OA": ("Is there osteoarthritis in the medial compartment?", "medial osteoarthritis"),
+    "Lateral OA": ("Is there osteoarthritis in the lateral compartment?", "lateral osteoarthritis"),
+    "PF OA": ("Is there osteoarthritis behind the kneecap (patellofemoral)?", "patellofemoral osteoarthritis"),
+    "Effusion": ("Is there a joint effusion (more fluid than normal)?", "joint effusion"),
+    "Synovitis": ("Is there synovitis?", "synovitis"),
+    "Baker's": ("Is there a Baker's cyst?", "Baker's cyst"),
+    "Contusion": ("Is there a bone bruise?", "bone bruise"),
+    "Fracture": ("Is there a fracture?", "fracture"),
+}
+_OA_EN = r"osteoarthr|arthros|degenerat|cartilag|chondr|osteophyt|joint space"
+_OA_XX = r"|arthrose|artroz|artros|hondro|hrskav|kıkırdak|cartílago|cartilagine|χόνδρ|хрущял|osteofit|ostéophyt"
+KEYWORDS = {  # English terms (for translations) + common stems in the dataset's languages (for untranslated text)
+    "ACL": r"anterior cruciate|\bACL\b|cruciate|kreuzband|križni|çapraz|crociato|cruzado|croisé|χιαστ|кръстн|крстаст",
+    "MCL": r"collateral|\bMCL\b|kollateral|kolateral|collatéral|colateral|collaterale|yan bağ|πλάγι|колатерал",
+    "Medial Meniscus": r"menisc|menisk|ménisque|μηνίσκ|мениск",
+    "Lateral Meniscus": r"menisc|menisk|ménisque|μηνίσκ|мениск",
+    "Medial OA": _OA_EN + _OA_XX,
+    "Lateral OA": _OA_EN + _OA_XX,
+    "PF OA": _OA_EN + _OA_XX + r"|patell|trochle|femoropatel|retropatel|rotul|rótul|επιγονατ|пател",
+    "Effusion": r"effusion|fluid|erguss|izljev|izliv|efüzyon|mayi|versamento|derrame|épanchement|συλλογ|излив|течност",
+    "Synovitis": r"synovi|sinovi|hoffa|συνοβ|синов",
+    "Baker's": r"baker|popliteal|poplit|бейкър|μπέικερ",
+    "Contusion": r"contusi|bruise|(o)?edema|kontuz|ödem|œdème|οίδημ|оток",
+    "Fracture": r"fractur|avulsion|segond|broken|\bbreak|fraktur|frattur|kırık|κάταγμ|фрактур|счупв|prijelom|prelom|zlom",
+}
 REVIEWS = ROOT / "meta/reviews.csv"
 STACKS = ROOT / "data/stacks"
+TRANSLATIONS = ROOT / "data/labeller/translations/translations.json"
 KAGGLE = str(ROOT / ".venv/bin/kaggle")
-SURFACE, TEXT, TEXT_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e6e5e1"
-ATTN, CURRENT = "#2a78d6", "#eb6834"  # validated categorical slots 1 and 2
 
 
-# ---------------------------------------------------------------- queue
+# ---------------------------------------------------------------- shared helpers
+def verdict(p):
+    return bool(p >= 0.5)
+
+
+def consequences(label, model_p, label_p):
+    noun = QUESTIONS[label][1]
+    m, l = verdict(model_p), verdict(label_p)
+    state = lambda t: "present" if t else "absent"  # noqa: E731
+    return {
+        "accept": {"title": f"Accept: {noun} {state(m)}", "truth": int(m),
+                   "detail": "The model is right. The training label is wrong." if m != l
+                   else "The model and the training label are both right."},
+        "deny": {"title": f"Deny: {noun} {state(not m)}", "truth": int(not m),
+                 "detail": "The model is wrong. The training label is right." if m != l
+                 else "The model and the training label are both wrong."},
+    }
+
+
+NOTICEABLE = 0.05  # log-odds change below which removing a slice doesn't really move the score
+
+
+def summarise(prob, series):
+    """Plain-English account of which slices carried the model's call."""
+    flat = [(s["slot"], i, c) for s in series for i, c in enumerate(s["contrib"])]
+    if max((abs(t[2]) for t in flat), default=0) < NOTICEABLE:
+        return (f"The model says {'present' if verdict(prob) else 'absent'} ({prob:.0%}), but removing any single slice "
+                "barely changes its score. The prediction reflects how common this finding is overall more than "
+                "anything specific it saw in this knee.")
+    says = verdict(prob)
+    support = sorted((t for t in flat if (t[2] > 0) == says and t[2] != 0), key=lambda t: -abs(t[2]))
+    oppose = sorted((t for t in flat if (t[2] > 0) != says and t[2] != 0), key=lambda t: -abs(t[2]))
+    total = sum(abs(t[2]) for t in flat) or 1.0
+    top5 = sum(abs(t[2]) for t in sorted(flat, key=lambda t: -abs(t[2]))[:5]) / total
+    concentration = top5 / (5 / max(len(flat), 5))  # 1.0 = evidence spread evenly over all slices
+    out = [f"The model says {'present' if says else 'absent'} ({prob:.0%})."]
+    if not support:
+        out.append("No slice pushes clearly in that direction.")
+    elif concentration < 2.5:
+        out.append("Its evidence is spread thinly across the whole study and no slice stands out, "
+                   "so read this as a general impression rather than a specific finding.")
+    else:
+        slot, i0 = support[0][0], support[0][1]
+        idx = sorted(i for s, i, _ in support[:6] if s == slot and abs(i - i0) <= 2)  # only close neighbours
+        span = f"slice {idx[0] + 1}" if len(idx) == 1 else f"slices {idx[0] + 1}–{idx[-1] + 1}"
+        out.append(f"The strongest evidence for that comes from {SLOT_INLINE[slot]} {span}.")
+    if support and oppose and sum(abs(t[2]) for t in oppose) > 0.5 * sum(abs(t[2]) for t in support):
+        s, i, _ = oppose[0]
+        out.append(f"Some slices push the other way, most of all {SLOT_INLINE[s]} slice {i + 1}.")
+    return " ".join(out)
+
+
+def split_sentences(text):  # same rule as the translation kernel, for reports without a translation
+    parts = [p.strip() for p in re.split(r"(?<=[.!?;])\s+|\n+", str(text)) if p.strip()]
+    out = []
+    for p in parts:
+        if out and (len(p) < 4 or not re.search(r"[^\W\d_]{2}", p)):
+            out[-1] += " " + p
+        else:
+            out.append(p)
+    return out
+
+
+def report_view(label, pairs, translated):
+    rx = re.compile(KEYWORDS[label], re.I)
+    sents = [{"src": s, "en": e, "hit": bool(rx.search(e if (translated and e) else s))} for s, e in pairs]
+    return {"translated": translated, "sentences": sents, "hits": sum(s["hit"] for s in sents),
+            "noun": QUESTIONS[label][1], "english_original": translated and all(s == e for s, e in pairs)}
+
+
+def to_png(arr):
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------- real data
 def latest_run():
     runs = sorted(d for d in (ROOT / "runs").glob("*") if (d / "oof.csv").exists() and (d / "config.json").exists())
     if not runs:
-        sys.exit("no finished training run in runs/ (needs oof.csv + config.json)")
+        sys.exit("no finished training run in runs/ (needs oof.csv + config.json). Train one with scripts/train_head.py")
     return runs[-1]
 
 
-def reviewed_pairs():
-    if not REVIEWS.exists():
-        return set()
-    r = pd.read_csv(REVIEWS)
-    return set(zip(r.StudyInstanceUID, r.label))
+def read_reviews():
+    return pd.read_csv(REVIEWS) if REVIEWS.exists() else pd.DataFrame(columns=["StudyInstanceUID", "label"])
 
 
-def build_queue(run, labels_csv, mode, n, label, seed=0):
-    cfg = json.loads((run / "config.json").read_text())
-    oof = pd.read_csv(run / "oof.csv")
-    scores = pd.read_csv(labels_csv).set_index("StudyInstanceUID")
-    train = pd.read_csv(ROOT / "data/raw/train.csv", usecols=lambda c: c != "Report").set_index("StudyInstanceUID")
-    gold = train.dropna(subset=LABELS)
-    done = reviewed_pairs()
-    rows = []
-    for r in oof.to_dict("records"):
-        u = r["StudyInstanceUID"]
-        for l in ([label] if label else LABELS):
-            if (u, l) in done:
-                continue
-            p = float(r[l])
-            rep = float(scores.at[u, cfg["label_map"][l]])
-            g = int(gold.at[u, l]) if u in gold.index else None
-            rows.append({"StudyInstanceUID": u, "fold": int(r["fold"]), "label": l, "model_prob": p, "report_score": rep,
-                         "gold": g, "gap": abs(p - (g if g is not None else rep))})
-    q = pd.DataFrame(rows)
-    if q.empty:
-        return q
-    if mode == "gold":
-        q = q[q.gold.notna()].sort_values("gap", ascending=False)
-    elif mode == "random":
-        q = q.sample(frac=1, random_state=seed)
-    else:  # disagree: rotate through findings so one label can't fill the queue
-        q = q.sort_values("gap", ascending=False)
-        q["rank"] = q.groupby("label").cumcount()
-        q = q.sort_values(["rank", "gap"], ascending=[True, False]).drop(columns="rank")
-    return q.head(n).reset_index(drop=True)
-
-
-# ---------------------------------------------------------------- data
 def stack_path(u):
     return STACKS / "stacks" / f"{u}.npz"
 
 
 class StackFetcher(threading.Thread):
-    """Downloads the queue's stacks in the background: one kaggle call per shard per chunk of studies
-    (each call pages through the kernel's file list once, about 40 s, so batching matters)."""
+    """Downloads stacks in queue order: one kaggle call per shard per chunk (each call pages through the kernel's
+    file list once, about 40 s, so batching matters)."""
 
-    def __init__(self, studies, index, chunk=40):
+    def __init__(self, studies, shard_of, chunk=40):
         super().__init__(daemon=True)
-        shard_of = index.drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID").shard
         self.jobs = {}
         for u in dict.fromkeys(studies):
             if not stack_path(u).exists():
@@ -114,23 +188,74 @@ class StackFetcher(threading.Thread):
         STACKS.mkdir(parents=True, exist_ok=True)
         for shard, uids in self.jobs.items():
             for i in range(0, len(uids), self.chunk):
-                part = uids[i:i + self.chunk]
-                pat = "(" + "|".join(re.escape(u) for u in part) + r")\.npz$"
-                r = subprocess.run([KAGGLE, "kernels", "output", f"maxranft/rsna-knee-preprocess-shard{shard}",
-                                    "-p", str(STACKS), "--file-pattern", pat, "-q"], capture_output=True, text=True)
+                pat = "(" + "|".join(re.escape(u) for u in uids[i:i + self.chunk]) + r")\.npz$"
+                r = subprocess.run([KAGGLE, "kernels", "output", f"maxranft/rsna-knee-preprocess-shard{shard}", "-p",
+                                    str(STACKS), "--file-pattern", pat, "-q"], capture_output=True, text=True)
                 if r.returncode != 0:
                     self.errors.append((r.stdout + r.stderr)[-200:])
 
 
-class Explainer:
-    """Re-runs the study's fold model on its cached features to get each label's attention over slices."""
-
-    def __init__(self, run, feats_dir):
+class RealSource:
+    def __init__(self, run, feats_dir, labels_csv):
         self.run, self.cfg = run, json.loads((run / "config.json").read_text())
+        self.oof = pd.read_csv(run / "oof.csv")
+        self.scores = pd.read_csv(labels_csv).set_index("StudyInstanceUID")
+        train = pd.read_csv(ROOT / "data/raw/train.csv").set_index("StudyInstanceUID")
+        self.reports = train.Report
+        self.gold = train[LABELS].dropna()
         fd = Path(feats_dir)
         self.index = pd.read_csv(fd / "index.csv")
         self.feat_paths = {int(f.stem.split("shard")[1]): str(f) for f in fd.glob("feats_shard*.npy")}
-        self.models = {}
+        self.oof = self.oof[self.oof.StudyInstanceUID.isin(set(self.index.StudyInstanceUID))]
+        self.shard_of = self.index.drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID").shard
+        self.models, self.lock, self.stacks, self._tokens = {}, threading.Lock(), {}, {}
+        self._tr, self._tr_mtime = {}, None
+        self.fetch_translations()
+
+    def fetch_translations(self):
+        if TRANSLATIONS.exists():
+            return
+        def go():
+            TRANSLATIONS.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run([KAGGLE, "kernels", "output", "maxranft/rsna-knee-translate", "-p", str(TRANSLATIONS.parent),
+                            "--file-pattern", r"^translations\.json$", "-q"], capture_output=True)
+        threading.Thread(target=go, daemon=True).start()
+
+    def translations(self):
+        if TRANSLATIONS.exists() and TRANSLATIONS.stat().st_mtime != self._tr_mtime:
+            try:
+                self._tr, self._tr_mtime = json.loads(TRANSLATIONS.read_text()), TRANSLATIONS.stat().st_mtime
+            except json.JSONDecodeError:  # still downloading
+                pass
+        return self._tr
+
+    def queue(self, mode, label, n, seed=0):
+        rv = read_reviews()
+        done = set(zip(rv.StudyInstanceUID, rv.label))
+        rows = []
+        for r in self.oof.to_dict("records"):
+            u = r["StudyInstanceUID"]
+            for l in ([label] if label else LABELS):
+                if (u, l) in done:
+                    continue
+                p, rep = float(r[l]), float(self.scores.at[u, self.cfg["label_map"][l]])
+                g = int(self.gold.at[u, l]) if u in self.gold.index else None
+                rows.append({"study": u, "fold": int(r["fold"]), "label": l, "model_prob": p, "report_score": rep,
+                             "gold": g, "gap": abs(p - (g if g is not None else rep))})
+        q = pd.DataFrame(rows)
+        if q.empty:
+            return q
+        if mode == "gold":
+            q = q[q.gold.notna()].sort_values("gap", ascending=False)
+        elif mode == "random":
+            q = q.sample(frac=1, random_state=seed)
+        else:  # biggest disagreements, rotating through findings so one label can't fill the queue
+            q = q.sort_values("gap", ascending=False)
+            q["rank"] = q.groupby("label").cumcount()
+            q = q.sort_values(["rank", "gap"], ascending=[True, False]).drop(columns="rank")
+        q = q.head(n).reset_index(drop=True)
+        StackFetcher(q.study, self.shard_of).start()
+        return q
 
     def model(self, fold):
         if fold not in self.models:
@@ -140,201 +265,258 @@ class Explainer:
             self.models[fold] = m.eval()
         return self.models[fold]
 
+    def tokens(self, u):
+        if u not in self._tokens:
+            ds = Studies([u], self.index, self.feat_paths, {u: np.zeros(len(LABELS), np.float32)})
+            x, slot, depth, _ = ds[0]
+            self._tokens[u] = (x.float()[None], slot[None], depth[None], ds.rows[u])
+            if len(self._tokens) > 16:
+                self._tokens.pop(next(iter(self._tokens)))
+        return self._tokens[u]
+
     @torch.no_grad()
+    def explain(self, u, fold, label, chunk=32):
+        """Occlusion per slice -> (probability, per-series {n, contrib per slice}). contrib = score with every slice
+        minus score without this slice (log-odds): positive = the slice pushed toward present."""
+        x, slot, depth, rows = self.tokens(u)
+        k, m, n = LABELS.index(label), self.model(fold), x.shape[1]
+        with self.lock:
+            full = m(x, slot, depth, torch.zeros(1, n, dtype=torch.bool))[0, k]
+            deltas = []
+            for s in range(0, n, chunk):
+                idx = list(range(s, min(n, s + chunk)))
+                pad = torch.zeros(len(idx), n, dtype=torch.bool)
+                pad[range(len(idx)), idx] = True
+                out = m(x.expand(len(idx), -1, -1, -1), slot.expand(len(idx), -1), depth.expand(len(idx), -1), pad)[:, k]
+                deltas.append(full - out)
+        contrib = torch.cat(deltas).numpy()
+        series, pos = [], 0
+        for r in rows:
+            series.append({"slot": r["slot"], "title": SLOT_TITLES[r["slot"]], "n": r["length"],
+                           "contrib": contrib[pos:pos + r["length"]].round(5).tolist()})
+            pos += r["length"]
+        return float(torch.sigmoid(full)), series
+
+    @torch.no_grad()
+    def region(self, u, fold, label, slot_name, idx):
+        """Occlusion per image region of one slice -> 16 values (4x4, row-major): score minus score with that region
+        replaced by the slice's average region."""
+        x, slot, depth, rows = self.tokens(u)
+        t = sum(r["length"] for r in rows[:[r["slot"] for r in rows].index(slot_name)]) + idx
+        k, m, n = LABELS.index(label), self.model(fold), x.shape[1]
+        xb = x.expand(16, -1, -1, -1).clone()
+        neutral = x[0, t, 1:].mean(0)
+        xb[torch.arange(16), t, torch.arange(16) + 1] = neutral
+        with self.lock:
+            full = m(x, slot, depth, torch.zeros(1, n, dtype=torch.bool))[0, k]
+            out = m(xb, slot.expand(16, -1), depth.expand(16, -1), torch.zeros(16, n, dtype=torch.bool))[:, k]
+        return (full - out).numpy().round(5).tolist()
+
+    def report(self, u):
+        tr = self.translations().get(u)
+        if tr:
+            return [(s, e if e else s) for s, e in tr], True
+        return [(s, None) for s in split_sentences(self.reports.get(u, ""))], False
+
+    def stack(self, u):
+        if u not in self.stacks:
+            f = stack_path(u)
+            try:
+                self.stacks[u] = dict(np.load(f)) if f.exists() else None
+            except Exception:  # still being written
+                return None
+            if self.stacks[u] is None:
+                del self.stacks[u]
+                return None
+            if len(self.stacks) > 12:
+                self.stacks.pop(next(iter(self.stacks)))
+        return self.stacks[u]
+
+    def ready(self, studies):
+        return sum(stack_path(u).exists() for u in set(studies))
+
+
+# ---------------------------------------------------------------- demo data (synthetic, no patient data)
+class DemoSource:
+    def __init__(self):
+        self.rng = np.random.default_rng(0)
+        self.run = Path("demo")
+
+    def queue(self, mode, label, n, seed=0):
+        rows = [("ACL", 0.91, 0.08, None), ("Fracture", 0.04, 1.0, None), ("Effusion", 0.12, 0.95, 1),
+                ("Lateral Meniscus", 0.55, 0.60, None)]
+        return pd.DataFrame([{"study": f"demo.{i:012d}", "fold": 0, "label": l, "model_prob": p, "report_score": r,
+                              "gold": g, "gap": abs(p - r)} for i, (l, p, r, g) in enumerate(rows) if not label or l == label])
+
     def explain(self, u, fold, label):
-        """-> (probability, attention [N], [(slot, slice index), ...] per token)."""
-        ds = Studies([u], self.index, self.feat_paths, {u: np.zeros(len(LABELS), np.float32)})
-        x, slot, depth, _ = ds[0]
-        logits, attn = self.model(fold)(x[None], slot[None], depth[None], torch.zeros(1, len(x), dtype=torch.bool),
-                                        return_attn=True)
-        k = LABELS.index(label)
-        tokens = [(r["slot"], i) for r in ds.rows[u] for i in range(r["length"])]
-        return float(torch.sigmoid(logits[0, k])), attn[0, k].numpy(), tokens
+        rng = np.random.default_rng(sum(map(ord, u + label)))
+        series = []
+        for j, s in enumerate(SLOT_NAMES):
+            n = 18 + 4 * j
+            base = np.exp(-((np.arange(n) - rng.integers(n)) ** 2) / 12) * rng.choice([-1, 1])
+            c = base * 0.3 + rng.normal(0, 0.03, n)
+            series.append({"slot": s, "title": SLOT_TITLES[s], "n": n, "contrib": c.round(5).tolist()})
+        return 0.5, series
 
+    def region(self, u, fold, label, slot_name, idx):
+        rng = np.random.default_rng(sum(map(ord, u + label + slot_name)) + idx)
+        g = np.zeros((4, 4))
+        g[rng.integers(4), rng.integers(4)] = rng.choice([-1, 1]) * 0.2
+        return (g + rng.normal(0, 0.02, (4, 4))).ravel().round(5).tolist()
 
-# ---------------------------------------------------------------- window
-class Reviewer:
-    def __init__(self, queue, explain, load_stack, report_text, run_name, fetcher=None):
-        import matplotlib.pyplot as plt
-        for k in list(plt.rcParams):
-            if k.startswith("keymap."):
-                plt.rcParams[k] = []  # our keys, not matplotlib's (s = save, q = quit, arrows = history)
-        self.plt, self.q, self.explain, self.load_stack, self.report_text = plt, queue, explain, load_stack, report_text
-        self.run_name, self.fetcher, self.i, self.graded = run_name, fetcher, 0, 0
-        self.fig = plt.figure(figsize=(15, 8.5), facecolor=SURFACE)
-        gs = self.fig.add_gridspec(2, 2, width_ratios=[1.05, 1], height_ratios=[1, 0.16], hspace=0.28, wspace=0.08,
-                                   left=0.03, right=0.98, top=0.93, bottom=0.07)
-        self.ax_img, self.ax_strip = self.fig.add_subplot(gs[0, 0]), self.fig.add_subplot(gs[1, 0])
-        self.ax_txt = self.fig.add_subplot(gs[:, 1])
-        self.fig.canvas.mpl_connect("key_press_event", self.on_key)
-        self.fig.canvas.mpl_connect("button_press_event", self.on_click)
-        self.timer = self.fig.canvas.new_timer(interval=1500)
-        self.timer.add_callback(self.poll)
-        self.load()
+    def report(self, u):
+        pairs = [("Primjer rečenice jedan.", "Example sentence one: the anterior cruciate ligament is continuous."),
+                 ("Primjer rečenice dva.", "Example sentence two: no joint effusion."),
+                 ("Primjer rečenice tri.", "Example sentence three: menisci without signs of tear."),
+                 ("Primjer rečenice četiri.", "Example sentence four: small popliteal cyst, 14 mm.")]
+        return pairs, True
 
-    # -- state
-    def load(self):
-        if self.i >= len(self.q):
-            self.item = None
-            self.draw()
-            return
-        it = self.q.iloc[self.i]
-        self.item = it
-        self.prob, self.attn, self.tokens = self.explain(it.StudyInstanceUID, int(it.fold), it.label)
-        self.cur = int(np.argmax(self.attn))
-        self.top = self.cur
-        self.stack = self.load_stack(it.StudyInstanceUID)
-        if self.stack is None:
-            self.timer.start()
-        self.draw()
-
-    def poll(self):
-        if self.item is not None and self.stack is None:
-            self.stack = self.load_stack(self.item.StudyInstanceUID)
-            if self.stack is not None:
-                self.timer.stop()
-                self.draw()
-
-    def record(self, decision):
-        it = self.item
-        slot, idx = self.tokens[self.top]
-        row = pd.DataFrame([{"reviewed_at": datetime.now().isoformat(timespec="seconds"), "run": self.run_name,
-                             "StudyInstanceUID": it.StudyInstanceUID, "fold": int(it.fold), "label": it.label,
-                             "model_prob": round(self.prob, 4), "report_score": round(float(it.report_score), 4),
-                             "gold": "" if pd.isna(it.gold) else int(it.gold), "decision": decision,
-                             "top_slot": slot, "top_slice": idx}])
-        REVIEWS.parent.mkdir(exist_ok=True)
-        row.to_csv(REVIEWS, mode="a", header=not REVIEWS.exists(), index=False)
-        self.graded += 1
-
-    # -- input
-    def on_key(self, ev):
-        if self.item is None:
-            if ev.key == "q":
-                self.plt.close(self.fig)
-            return
-        if ev.key in ("a", "d"):
-            self.record("accept" if ev.key == "a" else "deny")
-            self.i += 1
-            self.load()
-        elif ev.key == "s":
-            self.i += 1
-            self.load()
-        elif ev.key == "b" and self.i > 0:
-            self.i -= 1  # re-grading appends a new row; the latest decision wins
-            self.load()
-        elif ev.key in ("left", "right"):
-            s = self.tokens[self.cur][0]
-            j = self.cur + (1 if ev.key == "right" else -1)
-            if 0 <= j < len(self.tokens) and self.tokens[j][0] == s:
-                self.cur = j
-                self.draw()
-        elif ev.key in ("up", "down"):
-            slots = list(dict.fromkeys(t[0] for t in self.tokens))
-            s = slots[(slots.index(self.tokens[self.cur][0]) + (1 if ev.key == "down" else -1)) % len(slots)]
-            cand = [k for k, t in enumerate(self.tokens) if t[0] == s]
-            self.cur = max(cand, key=lambda k: self.attn[k])  # jump to that series' most-attended slice
-            self.draw()
-        elif ev.key == "q":
-            self.plt.close(self.fig)
-
-    def on_click(self, ev):
-        if ev.inaxes is self.ax_strip and self.item is not None and ev.xdata is not None:
-            self.cur = int(np.clip(round(ev.xdata), 0, len(self.tokens) - 1))
-            self.draw()
-
-    # -- drawing
-    def draw(self):
-        for ax in (self.ax_img, self.ax_strip, self.ax_txt):
-            ax.clear()
-            ax.set_facecolor(SURFACE)
-        self.ax_txt.axis("off")
-        if self.item is None:
-            self.ax_img.axis("off")
-            self.ax_strip.axis("off")
-            self.ax_txt.text(0, 0.9, f"Queue finished · {self.graded} graded this session.\nSaved to {REVIEWS.relative_to(ROOT)}"
-                             "\n\nPress q to close.", color=TEXT, fontsize=13, va="top", transform=self.ax_txt.transAxes)
-            self.fig.canvas.draw_idle()
-            return
-        it = self.item
-        slot, idx = self.tokens[self.cur]
-        n_slot = sum(1 for t in self.tokens if t[0] == slot)
-        share = self.attn[self.cur] / self.attn.sum()
-        self.fig.suptitle(f"{it.label}  ·  item {self.i + 1} of {len(self.q)}  ·  {self.graded} graded this session",
-                          x=0.03, ha="left", color=TEXT, fontsize=14)
-        # image
-        self.ax_img.axis("off")
-        if self.stack is None:
-            ready = "" if self.fetcher is None else " (batched download from Kaggle, about 1 min per shard)"
-            self.ax_img.text(0.5, 0.5, "downloading image…" + ready, ha="center", va="center", color=TEXT_2,
-                             transform=self.ax_img.transAxes, wrap=True)
-        else:
-            self.ax_img.imshow(self.stack[slot][idx], cmap="gray", vmin=0, vmax=255)
-        tag = "most-attended slice" if self.cur == self.top else "browsing"
-        self.ax_img.set_title(f"{SLOT_TITLES[slot]} · slice {idx + 1} of {n_slot} · {share:.0%} of attention ({tag})",
-                              loc="left", color=TEXT, fontsize=10)
-        # attention strip: where the model looked, across all series
-        xs = np.arange(len(self.tokens))
-        self.ax_strip.bar(xs, self.attn, width=0.85, color=ATTN)
-        self.ax_strip.bar([self.cur], [self.attn[self.cur]], width=0.85, color=CURRENT)
-        starts = [k for k in xs if k == 0 or self.tokens[k][0] != self.tokens[k - 1][0]]
-        for k in starts:
-            if k:
-                self.ax_strip.axvline(k - 0.5, color=TEXT_2, linewidth=0.8)
-            self.ax_strip.text(k, 1.02, SLOT_TITLES[self.tokens[k][0]].split(" (")[0], transform=self.ax_strip.get_xaxis_transform(),
-                               fontsize=8, color=TEXT_2, va="bottom")
-        self.ax_strip.set_xlim(-0.5, len(xs) - 0.5)
-        self.ax_strip.set_yticks([])
-        self.ax_strip.set_xticks([])
-        for s in ("top", "right", "left"):
-            self.ax_strip.spines[s].set_visible(False)
-        self.ax_strip.spines["bottom"].set_color(GRID)
-        self.ax_strip.set_xlabel("attention per slice for this finding (click to view a slice; orange = shown)",
-                                 color=TEXT_2, fontsize=8)
-        # text panel
-        verdict = lambda p: "PRESENT" if p >= 0.5 else "absent"  # noqa: E731
-        gold = "—" if pd.isna(it.gold) else verdict(float(it.gold))
-        agree = "agree" if verdict(self.prob) == verdict(float(it.report_score)) else "DISAGREE"
-        lines = [("Study", "…" + it.StudyInstanceUID[-12:]), ("Finding", it.label),
-                 ("Model", f"{self.prob:.0%}  → predicts {verdict(self.prob)}"),
-                 ("Training label", f"{float(it.report_score):.0%}  → report says {verdict(float(it.report_score))}"),
-                 ("Gold label", gold), ("Model vs report", agree), ("Fold", str(int(it.fold)))]
-        y = 0.98
-        for k, v in lines:
-            self.ax_txt.text(0.0, y, k, color=TEXT_2, fontsize=11, va="top", transform=self.ax_txt.transAxes)
-            self.ax_txt.text(0.30, y, v, color=TEXT, fontsize=11, va="top", transform=self.ax_txt.transAxes,
-                             fontweight="bold" if k in ("Model", "Model vs report") else "normal")
-            y -= 0.045
-        report = self.report_text(it.StudyInstanceUID)
-        wrapped = textwrap.wrap(" ".join(str(report).split()), 88)
-        body = "\n".join(wrapped[:30]) + ("\n…" if len(wrapped) > 30 else "")
-        self.ax_txt.text(0.0, y - 0.01, "Report (source of the training label)", color=TEXT_2, fontsize=10, va="top",
-                         transform=self.ax_txt.transAxes)
-        self.ax_txt.text(0.0, y - 0.045, body, color=TEXT, fontsize=8.5, va="top", family="monospace",
-                         transform=self.ax_txt.transAxes)
-        self.fig.text(0.03, 0.015, "a accept (model right)   d deny (model wrong)   s skip   b back   "
-                      "←/→ slice   ↑/↓ series   click strip   q quit", color=TEXT_2, fontsize=10)
-        self.fig.canvas.draw_idle()
-
-
-# ---------------------------------------------------------------- entry
-def demo_sources():
-    rng = np.random.default_rng(0)
-    q = pd.DataFrame([{"StudyInstanceUID": f"demo.{i:012d}", "fold": 0, "label": l, "model_prob": p, "report_score": r,
-                       "gold": g, "gap": abs(p - r)} for i, (l, p, r, g) in
-                      enumerate([("ACL", 0.91, 0.08, None), ("Effusion", 0.12, 0.95, 1), ("Lateral Meniscus", 0.55, 0.60, None)])])
-    tokens = [(s, i) for s in SLOT_NAMES for i in range(20)]
-
-    def explain(u, fold, label):
-        a = rng.gamma(0.6, size=len(tokens))
-        return float(q.loc[q.StudyInstanceUID == u, "model_prob"].iloc[0]), a / a.sum(), tokens
-
-    def load_stack(u):  # smooth synthetic blobs, not patient data
+    def stack(self, u):
         yy, xx = np.mgrid[:256, :256]
         img = lambda k: (np.clip(np.sin(xx / (17 + k)) * np.cos(yy / (23 + k)) * 127 + 128, 0, 255)).astype(np.uint8)  # noqa: E731
-        return {s: np.stack([img(i + j) for i in range(20)]) for j, s in enumerate(SLOT_NAMES)}
+        return {s: np.stack([img(i + j) for i in range(18 + 4 * j)]) for j, s in enumerate(SLOT_NAMES)}
 
-    return q, explain, load_stack, lambda u: "DEMO REPORT. " + "Placeholder text standing in for the radiology report. " * 12
+    def ready(self, studies):
+        return len(set(studies))
+
+
+# ---------------------------------------------------------------- app state
+class App:
+    def __init__(self, source, reviews_path, n):
+        self.src, self.reviews, self.n = source, reviews_path, n
+        self.mode, self.label = "disagree", ""
+        self.lock = threading.Lock()
+        self.load_queue("disagree", "", n)
+
+    def load_queue(self, mode, label, n):
+        with self.lock:
+            self.mode, self.label, self.n = mode, label or "", n
+            self.q = self.src.queue(mode, label or None, n)
+            self.cache, self.decisions, self.flags = {}, {}, {}
+
+    def session(self):
+        q = self.q
+        items = [] if q.empty else [{"i": i, "label": r.label, "decision": self.decisions.get(i)} for i, r in enumerate(q.itertuples())]
+        first = next((it["i"] for it in items if it["decision"] is None), len(items))
+        return {"run": self.src.run.name, "mode": self.mode, "label": self.label, "labels": LABELS, "items": items,
+                "first_open": first, "tally": self.tally(), "ready": self.src.ready(q.study) if len(q) else 0,
+                "studies": int(q.study.nunique()) if len(q) else 0}
+
+    def tally(self):
+        d = list(self.decisions.values())
+        return {"graded": sum(x != "unsure" for x in d), "label_wrong": sum(f[0] for f in self.flags.values()),
+                "model_wrong": sum(f[1] for f in self.flags.values())}
+
+    def item(self, i):
+        if i in self.cache:
+            return self.cache[i]
+        r = self.q.iloc[i]
+        prob, series = self.src.explain(r.study, int(r.fold), r.label)
+        if isinstance(self.src, DemoSource):
+            prob = float(r.model_prob)
+        flat = [(s["slot"], k, abs(c)) for s in series for k, c in enumerate(s["contrib"])]
+        top = max(flat, key=lambda t: t[2])
+        pairs, translated = self.src.report(r.study)
+        out = {"i": i, "n": len(self.q), "study_short": r.study[-10:], "label": r.label,
+               "question": QUESTIONS[r.label][0], "noun": QUESTIONS[r.label][1],
+               "model": prob, "report_label": float(r.report_score), "gold": None if pd.isna(r.gold) else int(r.gold),
+               "series": series, "start": {"slot": top[0], "idx": top[1]},
+               "scale": max(max((t[2] for t in flat), default=0.0), NOTICEABLE),
+               "negligible": max((t[2] for t in flat), default=0.0) < NOTICEABLE,
+               "summary": summarise(prob, series), "report": report_view(r.label, pairs, translated),
+               "choices": consequences(r.label, prob, float(r.report_score)), "decision": self.decisions.get(i)}
+        self.cache[i] = out
+        return out
+
+    def region(self, i, slot, idx):
+        r = self.q.iloc[i]
+        return {"grid": self.src.region(r.study, int(r.fold), r.label, slot, idx)}
+
+    def image(self, i, slot, idx):
+        st = self.src.stack(self.q.iloc[i].study)
+        if st is None:
+            return None
+        return to_png(st[slot][int(np.clip(idx, 0, len(st[slot]) - 1))])
+
+    def decide(self, i, decision):
+        it, r = self.item(i), self.q.iloc[i]
+        m, l = verdict(it["model"]), verdict(it["report_label"])
+        truth = it["choices"][decision]["truth"] if decision in ("accept", "deny") else None
+        label_wrong = int(truth is not None and truth != l)
+        model_wrong = int(truth is not None and truth != m)
+        row = {"reviewed_at": datetime.now().isoformat(timespec="seconds"), "run": self.src.run.name,
+               "StudyInstanceUID": r.study, "fold": int(r.fold), "label": r.label, "model_prob": round(it["model"], 4),
+               "report_score": round(it["report_label"], 4), "gold": "" if it["gold"] is None else it["gold"],
+               "decision": decision, "truth": "" if truth is None else truth, "model_right": "" if truth is None else 1 - model_wrong,
+               "label_right": "" if truth is None else 1 - label_wrong,
+               "strongest_slot": it["start"]["slot"], "strongest_slice": it["start"]["idx"],
+               "translated": int(it["report"]["translated"])}
+        with self.lock:
+            old = pd.read_csv(self.reviews) if self.reviews.exists() else pd.DataFrame()
+            self.reviews.parent.mkdir(parents=True, exist_ok=True)
+            pd.concat([old, pd.DataFrame([row])], ignore_index=True).to_csv(self.reviews, index=False)
+            self.decisions[i] = decision
+            self.flags[i] = (label_wrong, model_wrong)
+            self.cache.get(i, {})["decision"] = decision
+        return {"tally": self.tally(), "saved": it["choices"][decision]["title"] if truth is not None else "Marked unsure"}
+
+
+# ---------------------------------------------------------------- http
+def make_handler(app):
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def send(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            p = urlparse(self.path).path
+            try:
+                if p in ("/", "/index.html"):
+                    return self.send(200, (UI / "index.html").read_bytes(), "text/html; charset=utf-8")
+                if p.startswith("/static/"):
+                    f = (UI / p[len("/static/"):]).resolve()
+                    if UI.resolve() in f.parents and f.exists():
+                        ctype = {"css": "text/css", "js": "text/javascript"}.get(f.suffix[1:], "application/octet-stream")
+                        return self.send(200, f.read_bytes(), ctype + "; charset=utf-8")
+                if p == "/api/session":
+                    return self.send(200, app.session())
+                m = re.fullmatch(r"/api/item/(\d+)", p)
+                if m:
+                    return self.send(200, app.item(int(m[1])))
+                m = re.fullmatch(r"/api/region/(\d+)/(\w+)/(\d+)", p)
+                if m:
+                    return self.send(200, app.region(int(m[1]), m[2], int(m[3])))
+                m = re.fullmatch(r"/api/image/(\d+)/(\w+)/(\d+)\.png", p)
+                if m:
+                    png = app.image(int(m[1]), m[2], int(m[3]))
+                    if png is None:
+                        q = app.q
+                        return self.send(202, {"pending": True, "ready": app.src.ready(q.study), "studies": int(q.study.nunique())})
+                    return self.send(200, png, "image/png")
+                self.send(404, {"error": f"no route {p}"})
+            except Exception as e:  # show the reason in the page instead of a dead request
+                self.send(500, {"error": f"{type(e).__name__}: {e}"})
+
+        def do_POST(self):
+            p = urlparse(self.path).path
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            try:
+                if p == "/api/decision":
+                    return self.send(200, app.decide(int(body["i"]), body["decision"]))
+                if p == "/api/queue":
+                    app.load_queue(body.get("mode", "disagree"), body.get("label", ""), int(body.get("n", app.n)))
+                    return self.send(200, app.session())
+                self.send(404, {"error": f"no route {p}"})
+            except Exception as e:
+                self.send(500, {"error": f"{type(e).__name__}: {e}"})
+    return H
 
 
 def main():
@@ -342,50 +524,25 @@ def main():
     p.add_argument("--run", help="runs/<id> to review (default: latest finished run)")
     p.add_argument("--feats", default=str(ROOT / "data/features/dinov2s"))
     p.add_argument("--labels", default=str(ROOT / "data/labeller/all-v2/report_scores_all.csv"))
-    p.add_argument("--queue", choices=["disagree", "gold", "random"], default="disagree")
-    p.add_argument("--label", choices=LABELS, help="review one finding only")
     p.add_argument("--n", type=int, default=50, help="queue length")
+    p.add_argument("--port", type=int, default=8765)
     p.add_argument("--demo", action="store_true", help="synthetic data, to try the controls")
-    p.add_argument("--snapshot", help="render the first item to this PNG and exit (layout check; use with --demo)")
+    p.add_argument("--no-browser", action="store_true")
     args = p.parse_args()
-
-    if args.snapshot:
-        import matplotlib
-        matplotlib.use("Agg")
     if args.demo:
-        q, explain, load_stack, report_text = demo_sources()
-        fetcher, run_name = None, "demo"
-        global REVIEWS
-        REVIEWS = ROOT / "runs/demo_reviews.csv"
+        app = App(DemoSource(), ROOT / "runs/demo_reviews.csv", args.n)
     else:
         run = Path(args.run) if args.run else latest_run()
-        q = build_queue(run, args.labels, args.queue, args.n, args.label)
-        if q.empty:
-            sys.exit("nothing left to review for this selection")
-        ex = Explainer(run, args.feats)
-        missing = set(q.StudyInstanceUID) - set(ex.index.StudyInstanceUID)
-        q = q[~q.StudyInstanceUID.isin(missing)].reset_index(drop=True)
-        fetcher = StackFetcher(q.StudyInstanceUID, ex.index)
-        fetcher.start()
-        reports = pd.read_csv(ROOT / "data/raw/train.csv", usecols=["StudyInstanceUID", "Report"]).set_index("StudyInstanceUID").Report
-
-        def load_stack(u):
-            f = stack_path(u)
-            try:
-                return dict(np.load(f)) if f.exists() else None
-            except Exception:  # still being written
-                return None
-
-        explain, report_text, run_name = ex.explain, lambda u: reports.get(u, ""), run.name
-        print(f"run {run.name}: {len(q)} items ({args.queue}); {len(fetcher.jobs)} shard(s) to download", flush=True)
-
-    r = Reviewer(q, explain, load_stack, report_text, run_name, fetcher)
-    if args.snapshot:
-        r.fig.savefig(args.snapshot, facecolor=SURFACE, dpi=90)
-        print("snapshot:", args.snapshot)
-        return
-    r.plt.show()
-    print(f"{r.graded} decisions saved to {REVIEWS}")
+        app = App(RealSource(run, args.feats, args.labels), REVIEWS, args.n)
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
+    url = f"http://127.0.0.1:{args.port}"
+    print(f"review tool on {url} (run {app.src.run.name}, {len(app.q)} items). Ctrl+C to stop.", flush=True)
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print(f"\nstopped. Decisions are in {app.reviews}")
 
 
 if __name__ == "__main__":

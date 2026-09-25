@@ -24,3 +24,13 @@ Full run estimate (4,407 reports × 15 questions): about 35 min of prompts + 4 m
 Gold agreement with that swap: about 0.861 macro.
 **Next labeller levers:** a stronger model (Qwen2.5-14B-AWQ or Qwen3-8B) for Synovitis / Lateral OA / Contusion.
 Rewording against 58 studies has run its course for those labels.
+
+## Findings from manual review (2026-09-24)
+- **Cartilage fissure read as fracture.** The first review item was a report describing a trochlear cartilage *fissure*
+  ("fisura") with no fracture; the labeller scored Fracture 1.0 and the model (0.04) was right. Aggregate check over all
+  reports: of 313 labelled fracture (score > 0.5), 206 contain a fracture word, **9 only a fissure word**, and 98 neither
+  (other terms, languages my regex misses, or labeller errors). Next labeller version: Fracture question says
+  "a break in a bone, not a cartilage fissure or chondral defect".
+- **Gold fracture is broader than the word.** Only 10 of the 18 gold fracture positives contain a fracture word, so gold
+  likely counts osteochondral / impaction / insufficiency lesions that reports describe differently. Review the gold
+  queue for Fracture before rewording further.
