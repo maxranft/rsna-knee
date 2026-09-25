@@ -19,6 +19,7 @@ KERNELS = [  # (name, module, entry point, {placeholder: value}, gpu, internet, 
        {"{mode}": mode}, True, True, []) for mode in ("gold", "all")],
     ("rsna-knee-features-dinov2s", "src/knee/features.py", "kaggle/features/main.py", {}, True, True, SHARD_KERNELS),
     ("rsna-knee-features-dinov2s-parts", [], "kaggle/rechunk/main.py", {}, False, False, ["maxranft/rsna-knee-features-dinov2s"]),
+    ("rsna-knee-translate", [], "kaggle/translate/main.py", {}, True, True, []),
     ("rsna-knee-assets", "src/knee/features.py", "kaggle/assets/main.py", {}, False, True, []),
     ("rsna-knee-submit", ["src/knee/preprocess.py", "src/knee/features.py", "src/knee/head.py"], "kaggle/submit/main.py",
      {}, True, False, ["maxranft/rsna-knee-assets"]),  # + dataset maxranft/rsna-knee-heads, added below
