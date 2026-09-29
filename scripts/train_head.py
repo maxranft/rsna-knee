@@ -56,6 +56,8 @@ def main():
     p.add_argument("--feats", required=True, help="dir with index.csv and feats_shard*.npy")
     p.add_argument("--labels", required=True, help="labeller report_scores_all.csv")
     p.add_argument("--label-map", default="{}", help='JSON {label: column} to use a variant column, e.g. {"Effusion": "Effusion@moderate"}')
+    p.add_argument("--canon", default="", help="meta/laterality.csv: mirror left knees into right-knee layout (medial on one side)")
+    p.add_argument("--slice-drop", type=float, default=0.0, help="training: drop each slice with this probability")
     p.add_argument("--folds", default="0,1,2,3,4")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--bs", type=int, default=16)
@@ -92,6 +94,11 @@ def main():
     targets = {u: (train_csv.loc[u, LABELS].values.astype(np.float32) if u in gold_ids else report.loc[u].values.astype(np.float32))
                for u in folds.StudyInstanceUID if u in have and (u in gold_ids or u in report.index)}
     folds = folds[folds.StudyInstanceUID.isin(targets)]
+    left = None
+    if args.canon:
+        lat = pd.read_csv(ROOT / args.canon)
+        left = dict(lat.loc[lat.side == "L", ["StudyInstanceUID", "t1_plane"]].itertuples(index=False))
+        print(f"canonicalising {len(left)} left knees into right-knee layout", flush=True)
     print(f"device={dev} studies={len(folds)} gold={folds.is_gold.sum()} feats={T}x{C}", flush=True)
 
     # ---- train / predict per fold ----
@@ -103,9 +110,10 @@ def main():
     for f in fold_list:
         tr = folds.StudyInstanceUID[folds.fold != f].tolist()
         va = folds.StudyInstanceUID[folds.fold == f].tolist()
-        dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f), batch_size=args.bs,
+        dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f, left=left,
+                                                    slice_drop=args.slice_drop), batch_size=args.bs,
                                             shuffle=True, collate_fn=collate, num_workers=args.workers, persistent_workers=args.workers > 0)
-        dl_va = torch.utils.data.DataLoader(Studies(va, index, feats, targets), batch_size=args.bs * 2, collate_fn=collate,
+        dl_va = torch.utils.data.DataLoader(Studies(va, index, feats, targets, left=left), batch_size=args.bs * 2, collate_fn=collate,
                                             num_workers=args.workers)
         model = Head(T, C, args.d, len(LABELS), args.layers).to(dev)
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
@@ -133,7 +141,8 @@ def main():
     oof = pd.concat(oof)
     oof.to_csv(out / "oof.csv", index=False)
     (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers,
-                                                 "labels": LABELS, "label_map": label_map, "feats": str(fd)}, indent=1))
+                                                 "labels": LABELS, "label_map": label_map, "feats": str(fd),
+                                                 "canon": bool(args.canon)}, indent=1))
 
 
     # ---- metrics ----

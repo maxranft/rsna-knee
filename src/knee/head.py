@@ -12,6 +12,18 @@ import torch
 import torch.nn as nn
 
 SLOT_NAMES = ["sag_fs", "cor_fs", "ax_fs", "t1"]  # same order as preprocess.SLOTS
+SLOT_PLANES = {"sag_fs": "Sagittal", "cor_fs": "Coronal", "ax_fs": "Axial"}  # t1 is Coronal or Sagittal, per study
+
+
+def mirror(x, plane):
+    """Lay one slot of a left knee out like a right knee, so medial is always on the same side (scripts/laterality.py).
+    x [D, 1 + g*g, C]. Coronal / axial: reverse the grid columns (patient x). Sagittal: reverse the slice order.
+    Token contents are not mirrored, only their layout. Labels are unchanged: Medial stays Medial."""
+    if plane == "Sagittal":
+        return x[::-1]
+    g = math.isqrt(x.shape[1] - 1)
+    grid = x[:, 1:].reshape(len(x), g, g, -1)[:, :, ::-1].reshape(len(x), g * g, -1)
+    return np.concatenate([x[:, :1], grid], 1)
 
 
 def fourier(depth, n=8):
@@ -49,12 +61,16 @@ class Head(nn.Module):
 class Studies(torch.utils.data.Dataset):
     """Study -> (tokens [N, T, C] float16, slot ids [N], depth [N], targets [12]).
     index: DataFrame(StudyInstanceUID, slot, shard, start, length); feat_paths: {shard: path to .npy [n, T, C]}.
+    left: {uid: t1_plane} for left knees, which are mirrored into right-knee layout (None = no canonicalisation).
+    slice_drop: training only, drop each slice with this probability (at least 4 kept per slot).
     Memmaps open lazily per worker: pickling an open memmap (spawned DataLoader workers) would copy it."""
 
-    def __init__(self, uids, index, feat_paths, targets, train=False, slot_drop=0.1, seed=0):
+    def __init__(self, uids, index, feat_paths, targets, train=False, slot_drop=0.1, seed=0, left=None, slice_drop=0.0):
         self.uids = list(uids)
         self.rows = {u: g.to_dict("records") for u, g in index[index.StudyInstanceUID.isin(set(self.uids))].groupby("StudyInstanceUID")}
         self.feat_paths, self.targets, self.train, self.slot_drop = dict(feat_paths), targets, train, slot_drop
+        self.left = left or {}
+        self.slice_drop = slice_drop
         self.seed, self.rng, self._feats = seed, None, None
 
     @property
@@ -78,9 +94,16 @@ class Studies(torch.utils.data.Dataset):
         xs, slots, depths = [], [], []
         for r in rows:
             a = np.asarray(feats[r["shard"]][r["start"]:r["start"] + r["length"]])
+            if u in getattr(self, "left", {}):  # getattr: datasets pickled by an older version of this file
+                a = np.ascontiguousarray(mirror(a, SLOT_PLANES.get(r["slot"], self.left[u])))
+            depth = np.linspace(0, 1, len(a))
+            if self.train and getattr(self, "slice_drop", 0) > 0:  # depth is kept, so dropped slices leave gaps
+                keep = self.rng.random(len(a)) > self.slice_drop
+                if keep.sum() >= 4:
+                    a, depth = a[keep], depth[keep]
             xs.append(a)
             slots.append(np.full(len(a), SLOT_NAMES.index(r["slot"])))
-            depths.append(np.linspace(0, 1, len(a)))
+            depths.append(depth)
         return (torch.from_numpy(np.concatenate(xs)), torch.from_numpy(np.concatenate(slots)).long(),
                 torch.from_numpy(np.concatenate(depths)).float(), torch.as_tensor(self.targets[u], dtype=torch.float32))
 
