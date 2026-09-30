@@ -1,0 +1,219 @@
+RSNA KNEE: SCRIPTS TO RUN AND THEIR OUTCOMES
+Last updated 2026-09-29. Run from the repo root with the project venv: .venv/bin/python <script>.
+Every training run is also logged as one row in experiments.md. The results viewer is notebooks/results.ipynb.
+Metric reminder: gold macro AUC (58 studies) decides. Gold differences below ~0.02 are noise.
+Report macro AUC (4,349 studies) is the steadier signal for choosing between models.
+
+
+1. EXPERIMENTS (the head trained on cached features, 5 folds, fixed seed)
+------------------------------------------------------------------------
+KEEP THE MAC AWAKE during a queue, on AC power: caffeinate -is -w <queue pid>
+(-i alone did not stop sleep with the lid closed on 2026-09-29: a run froze for ~90 min, another stalled 17 min between
+epochs. -s prevents system sleep while on AC. Nothing is lost when it sleeps; training just pauses.)
+ONE TRAINING AT A TIME on the Mac. Two in parallel filled swap on 2026-09-29 and both stalled (10+ min per epoch).
+Chain runs:  while kill -0 <pid>; do sleep 15; done; <next command>
+Pause / resume a run without losing it:  kill -STOP <pid>; pkill -STOP -P <pid>   (then -CONT to resume)
+
+Common part of every command:
+  .venv/bin/python scripts/train_head.py --labels data/labeller/all-v2/report_scores_all.csv \
+      --label-map '{"Effusion": "Effusion@moderate"}' --no-open --log "<what changed>"  <flags below>
+
+ID  Flags                                            Change vs its reference         Outcome
+--  -----------------------------------------------  ------------------------------  ---------------------------------
+E0  --feats data/features/dinov2s --workers 0       baseline (full 6.6 GB cache)    First attempt (20260929-134754-killed)
+                                                                                     stopped after 1.8 folds: it ran beside
+                                                                                     E1 and the Mac ran out of memory.
+                                                                                     Fold 0 report AUC 0.767 (E1: 0.779).
+                                                                                     Re-run as E0b below.
+E1  --feats data/features/dinov2s-pca128 --workers 0 PCA-128 token cache, loading    DONE (20260929-140030). CURRENT REFERENCE.
+                                                     in-process. vs E0.              Gold 0.724, report 0.780. Weakest gold:
+                                                                                     Medial Meniscus 0.54, Synovitis 0.58,
+                                                                                     Lateral OA 0.67. Peaks at epoch 7 and
+                                                                                     overfits after. ~15 min alone.
+                                                                                     Left-knee MCL 0.06 below right knees.
+E2  E1 flags + --canon meta/laterality.csv           mirror left knees into right-   DONE (20260929-153340). REJECTED.
+                                                     knee layout. vs E1.             Gold 0.726 (+0.001, noise), report 0.777
+                                                                                     (-0.003, P(better) 0.07). The MCL gap
+                                                                                     shrank only because right knees got worse.
+E3  E1 flags + --slice-drop 0.2                      drop 20% of slices in training  DONE (20260929-155055). NEUTRAL.
+                                                                                     Gold 0.723 (-0.002), report 0.781
+                                                                                     (+0.002, P(better) 0.86). Not adopted;
+                                                                                     kept as an ensemble member.
+E4  E1 flags + --epochs 8                            stop near the epoch-7 peak      DONE (20260929-160636). REJECTED.
+                                                                                     Report -0.005 (90% CI -0.008..-0.002),
+                                                                                     gold -0.006. Shorter schedule = shorter
+                                                                                     annealing, not a free early stop.
+E5  E1 flags + --seed 43, then --seed 44             ensemble members                DONE (20260929-175445, 20260929-183940).
+                                                                                     Seeds 42/43/44: report 0.780/0.776/0.778,
+                                                                                     gold 0.724/0.714/0.718. SEED NOISE is ~0.004
+                                                                                     report and ~0.010 gold.
+ENS scripts/ensemble_oof.py E1 E5a E5b               3-seed ensemble                 DONE (ens-20260929-185332). ADOPTED for the
+                                                                                     submission. Gold 0.734, report 0.792:
+                                                                                     +0.0125 report (90% CI +0.010..+0.015),
+                                                                                     +0.010 gold vs E1. Packaged (15 heads).
+    ... + E3 E4                                      5-run ensemble                  DONE (ens-20260929-185334). NEUTRAL vs the
+                                                                                     3-seed one: report +0.002, gold -0.002.
+    ... + E7 (dropout-0.3 seeds 42, 43)              5-member ensemble               CHECKED 2026-09-29 (not logged): report
+                                                                                     +0.0012 (CI +0.0004..+0.0020), gold +0.003
+                                                                                     vs the 3-seed one. Diminishing returns;
+                                                                                     same-architecture runs can join for free
+                                                                                     (d=128 or 2-layer heads cannot: the kernel
+                                                                                     loads one config for all heads).
+E0b --feats data/features/dinov2s --workers 0        full-cache baseline, re-run     DONE (20260929-185257). BASELINE.
+                                                                                     Gold 0.719, report 0.762. PCA-128 beats it
+                                                                                     by +0.018 report (CI +0.014..+0.022):
+                                                                                     fewer input dims regularise the head.
+--- Round 2 (2026-09-29 evening): every change with seeds 42 and 43, judged with scripts/compare_groups.py ---
+E6  --feats data/features/dinov2s-pca64              PCA-64 (84% var) vs PCA-128     DONE (20260929-210227, -211413). REJECTED.
+                                                                                     2-run ensemble report -0.0065 (CI -0.009..
+                                                                                     -0.004); fine-detail labels lose most.
+E7  E1 flags + --drop 0.3                            head dropout 0.3 (was 0.1)      DONE (20260929-213145, -222621). NEUTRAL.
+                                                                                     Single models +0.004 report, +0.005 gold,
+                                                                                     half the seed spread; 2-run ensemble only
+                                                                                     +0.001 report. Fine as ensemble members.
+E8  E1 flags + --d 128                               projection width 128 (was 256)  DONE (20260929-230201, -231317). NEUTRAL.
+                                                                                     Single models +0.002 report, steadier;
+                                                                                     2-run ensemble flat.
+--- Round 3 (runs/queue4.sh, starts after queue3) ---
+E9  --feats data/features/dinov2s-pca192             PCA-192 (96% var) vs PCA-128    DONE (20260929-232524, -233729). NEUTRAL.
+                                                                                     Ensemble report +0.003, gold -0.003.
+                                                                                     64 < 128 = 192 > 384: keep 128.
+E10 E1 flags + --layers 2                            2 transformer layers (was 1)    DONE (20260929-235139, 20260930-000848).
+                                                                                     REJECTED: gold -0.009 on both seeds.
+--- Ensemble members (runs/queue5.sh, after queue4) ---
+E11 E1 flags + --drop 0.3 --seed 44/45/46            more members for the final      DONE (20260930-002642, -004124, -005737).
+                                                     ensemble                        Dropout-0.3 single models: report 0.781-
+                                                                                     0.784 vs 0.776-0.780 for the reference.
+ENS2 ensemble_oof.py 3 reference + 5 dropout seeds   8-member ensemble               DONE (ens-20260930-012334). ADOPTED, replaces
+                                                                                     the 3-seed one. Gold 0.739, report 0.796:
+                                                                                     +0.004 report (CI +0.003..+0.005), +0.005
+                                                                                     gold vs 3-seed. Packaged (40 heads).
+--- Round 4 (runs/queue6.sh) ---
+E12 E1 flags + --lr 6e-4                             learning rate 6e-4 (was 3e-4)   DONE (20260930-023100, -024036). REJECTED.
+                                                                                     Report -0.007, gold -0.007, unstable.
+E13 E1 flags + --drop 0.3 --epochs 16                longer training when regularised DONE seeds 42/43 (20260930-025023, -030514).
+                                                                                     ADOPTED FOR ENSEMBLE MEMBERS: with 3 seeds,
+                                                                                     single models tie on report, but 3-run
+                                                                                     ensembles gain +0.0047 report (CI +0.003..
+                                                                                     +0.007), +0.006 gold: more diverse seeds.
+                                                                                     Seeds 44-46 done (runs/queue7.sh).
+ENS3 ensemble_oof.py all 13 compatible runs          13-member ensemble              DONE (ens-20260930-042109). ADOPTED (accurate):
+                                                                                     gold 0.7425, report 0.8003; +0.004 report
+                                                                                     (CI +0.0035..+0.0048) vs the 8-member.
+                                                                                     Packaged (65 heads).
+    ... 5 seeds of 16 ep + dropout 0.3 only          5-member ensemble               DONE (ens-20260930-042108). Same report
+                                                                                     (0.8005), 25 heads: efficiency variant.
+--- Round 5 (runs/queue8.sh) ---
+E14 E1 flags + --drop 0.3 --epochs 24, seeds 42-44   does longer training add more   DONE (20260930-042243, -045101, -052253).
+                                                     ensemble diversity?             REJECTED: single models -0.008 report,
+                                                                                     3-run ensemble -0.001. 16 epochs it is.
+--- Round 6 (runs/queue9.sh) ---
+E15 16-ep + dropout 0.3 + --slot-drop 0.3, 42-44     drop whole series more often    DONE (20260930-055449, -061338, -063255).
+                                                     (was 0.1)                       BEST SINGLE MODELS: report 0.787-0.788,
+                                                                                     gold 0.735-0.744 (+0.005 / +0.011 vs 16-ep).
+                                                                                     3-run ensembles tie on report. Efficiency
+                                                                                     candidate: its 3-seed ensemble (15 heads),
+                                                                                     gold 0.752, report 0.797.
+ENS4 the adopted 13 + the 3 E15 seeds                16-member ensemble              DONE (ens-20260930-065156). ADOPTED (accurate):
+                                                                                     gold 0.746, report 0.801. +0.0007 report,
+                                                                                     +0.004 gold vs 13-member: saturating.
+--- Round 7 (runs/queue10.sh): single-model focus, each vs E15, seeds 42-44 ---
+E16 E15 flags with --slot-drop 0.5                   more series dropout             DONE (20260930-065307, -071028, -072937).
+                                                                                     REJECTED: singles tie, 3-run ensemble
+                                                                                     -0.0024 report (CI -0.004..-0.001).
+E17 E15 flags + --slice-drop 0.2                     both input regularisers         DONE (20260930-074748, -080359, -081953).
+                                                                                     REJECTED, GOLD WINS: report +0.001 (ens.),
+                                                                                     gold -0.0155 (CI -0.029..-0.003).
+--- Round 8 (runs/queue11.sh): aim at gold, the arbiter ---
+E18 E15 flags + --gold-repeat 10, seeds 42-44        gold studies 10x per epoch      DONE (20260930-083719, -090049, -092428).
+                                                                                     REJECTED: gold within noise (+0.004 ens.,
+                                                                                     CI +-0.022), report -0.0024. Same inference architecture, so
+                                                     ensemble                        they can join the 15 packaged heads.
+
+Queue files: runs/queue3.sh runs its lines one after another (nohup runs/queue3.sh > runs/queue3.out &),
+then keep the Mac awake for it: caffeinate -is -w $(pgrep -f runs/queue3.sh).
+Watch the queue live in a terminal (Ctrl+C stops watching, not training):
+  scripts/watch_training.sh            (or double-click runs/watch_training.command to open it in Terminal)
+Two-seed comparison against the reference's seeds 42 and 43:
+  .venv/bin/python scripts/compare_groups.py --a runs/20260929-140030 runs/20260929-175445 --b runs/<s42> runs/<s43>
+  -> each run, the seed means, a 2-run ensemble vs 2-run ensemble paired bootstrap, and per-label changes.
+Do not edit a queue file while it runs (bash reads it as it goes); stop it and start a new one instead.
+
+How to read an outcome, and what to do next:
+  - Seed noise first: one seed per config moves report macro by ~0.004 and gold by ~0.010. A single-seed difference
+    below that is not a result. Confirm a promising change with a second seed, or compare seed means.
+  - Report macro up by >= ~0.005, with a bootstrap 90% interval above 0 and gold not down by more than 0.02:
+      adopt the change and make it the new reference.
+  - Report macro flat (interval straddles 0): keep the change only if it is cheaper (e.g. E1: 3x smaller, 2x faster).
+  - Report macro down: reject. Keep the flag in the code, off by default.
+  - Left/right check (scripts/side_split.py): the one-sided findings (menisci, tibiofemoral OA, MCL, Baker's) should
+    score the same on left and right knees. E2 did not fix the MCL gap; the untested fix is a pixel-level flip of
+    left knees before the encoder (a new feature cache on Kaggle, ~15 min T4).
+
+Compare any two runs (per-label table + paired bootstrap):
+  .venv/bin/python scripts/compare_runs.py runs/<reference> runs/<candidate>
+  -> prints per-label gold/report AUC and, per metric, "diff, lo 5%, hi 95%, P(better)". ~10 s idle, minutes if busy.
+Left-vs-right knee check:
+  .venv/bin/python scripts/side_split.py runs/<id>
+  -> report AUC per label for right and left knees, and the mean L - R gap for medial/lateral vs other labels.
+Results dashboard (browser): .venv/bin/python scripts/dashboard.py --open   -> runs/dashboard.html
+  -> overview, run in progress, every run with verdict and 90% CI vs the reference, per-label heat map, the reference
+     model's per-label AUC + ROC curves + label ceiling + left/right split, the data, efficiency. Rebuilt automatically
+     after every fold and run; the open page reloads each minute while training. Verdicts come from experiments.md.
+Results viewer (VS Code): open notebooks/results.ipynb, pick the .venv kernel, Run All.
+  -> live runs + learning curves, leaderboard, per-label tables, baseline vs candidate, knee-side split.
+Ensemble runs (rank-average of out-of-fold predictions, scored like a run, row appended to experiments.md):
+  .venv/bin/python scripts/ensemble_oof.py runs/<a> runs/<b> runs/<c> --log "<description>"   -> runs/ens-<timestamp>/
+Re-draw one run's live dashboard: .venv/bin/python src/knee/progress.py runs/<id>   -> runs/<id>/progress.png
+
+
+2. LOCAL DATA PREP (Mac)
+------------------------
+scripts/fetch_features.py maxranft/rsna-knee-features-dinov2s-parts data/features/dinov2s
+  Downloads the feature cache in ~200 MB parts (retries, resumable) and reassembles one .npy per shard.
+  Outcome (2026-09-29): all 3 shards complete. 4,407 studies, 507,464 slices, 17 tokens x 384 dims, 6.6 GB.
+  Re-running skips finished shards. The Kaggle API sometimes returns 429 (rate limit), so re-run it.
+
+scripts/pca_cache.py data/features/dinov2s data/features/dinov2s-pca128 --k 128
+  Projects every token onto its top-128 principal components and saves pca.npz for the submission.
+  Outcome: 92.0% of variance kept (64 -> 84%, 192 -> 96%). 2.2 GB instead of 6.6 GB. ~1 min.
+
+scripts/laterality.py --feats data/features/dinov2s
+  Knee side (L/R) for every study -> meta/laterality.csv (tag, report, p_left, side, side_source, t1_plane).
+  The classifier trains on the DICOM tag. It sees only mirror-antisymmetric image features.
+  Outcome: the image probe matches the DICOM tag 99.2% out-of-fold (AUC 0.993). The report's side matches the tag
+  only 96.9%, so the report is the noisier source. Final sides: tag 2,176, image probe 2,231. R 2,332 / L 2,075.
+  ~1.5 min. Needs data/pp-slots/slots_shard{0,1,2}.csv (preprocess kernel outputs, fetched 2026-09-29).
+
+scripts/make_folds.py
+  Fixed 5-fold split -> meta/folds.csv. Committed. NEVER regenerate: every result depends on these folds.
+
+scripts/review.py  [--demo]
+  Local browser review tool (http://127.0.0.1:8765): grade predictions per study and finding -> meta/reviews.csv.
+  For Max only. It shows images and report text, so never run it inside a Claude session.
+
+
+3. KAGGLE KERNELS (built by scripts/build_kernels.py, pushed with the Kaggle CLI)
+-------------------------------------------------------------------------------
+  .venv/bin/python scripts/build_kernels.py
+  .venv/bin/kaggle kernels push -p build/<name>              (add --accelerator NvidiaTeslaT4 for GPU kernels)
+
+rsna-knee-preprocess-shard{0,1,2}  CPU    DICOM -> 4-slot uint8 stacks + slots_shard{k}.csv (incl. DICOM laterality).
+                                          Done.
+rsna-knee-labeller-{gold,all}      GPU    Qwen2.5-7B yes/no scoring of reports -> report_scores_*.csv.
+                                          Outcome: labeller vs gold macro AUC 0.852. Weakest: Effusion 0.71
+                                          (0.82 with the @moderate variant, which is adopted), Synovitis 0.71,
+                                          Lateral OA 0.80.
+rsna-knee-features-dinov2s         GPU    Frozen DINOv2-S -> feature cache (11.6 min, 6.6 GB).
+rsna-knee-features-dinov2s-parts   CPU    Splits the cache into ~200 MB parts for fetch_features.py.
+rsna-knee-translate                GPU    English translations of reports, for review.py only.
+rsna-knee-assets                   CPU    Saves the encoder weights for the offline submission.
+  Package heads for the submission (nothing is uploaded):
+    .venv/bin/python scripts/package_heads.py runs/ens-20260930-065156   -> build/rsna-knee-heads (80 heads + pca.npz)
+    .venv/bin/kaggle datasets create -p build/rsna-knee-heads            (first upload; later: datasets version)
+
+rsna-knee-submit                   GPU    Offline submission: test DICOM -> stacks -> encoder -> every fold head.
+                                          Outcome: NOT SUBMITTED YET ("No submissions found", 2026-09-29).
+                                          Needs the fold heads uploaded as dataset maxranft/rsna-knee-heads.
+                                          The kernel applies pca.npz itself (tested locally 2026-09-29) and averages
+                                          all heads it finds. It does not implement --canon runs.

@@ -50,7 +50,13 @@ for f in find("head_fold*.pt"):
     h = Head(cfg["tokens"], cfg["dim"], cfg["d"], len(LABEL_COLS), cfg["layers"])
     h.load_state_dict(torch.load(f, map_location="cpu"))
     heads.append(h.to(dev).eval())
-print(f"{len(studies)} studies, {len(heads)} heads, device {dev}, setup {time.time() - t0:.0f}s", flush=True)
+pca = None
+if cfg["dim"] != encoder.num_features:  # heads trained on a PCA-reduced cache (scripts/pca_cache.py)
+    z = np.load(find("pca.npz")[0])
+    pca = (torch.as_tensor(z["mean"], device=dev), torch.as_tensor(z["components"], device=dev))
+    assert tuple(pca[1].shape) == (cfg["dim"], encoder.num_features), pca[1].shape
+print(f"{len(studies)} studies, {len(heads)} heads, pca {pca is not None}, device {dev}, setup {time.time() - t0:.0f}s",
+      flush=True)
 
 rows, errors = [], []
 with torch.no_grad():
@@ -61,7 +67,10 @@ with torch.no_grad():
             rows.append([u] + [0.5] * len(LABEL_COLS))
             continue
         names = [s for s in SLOT_NAMES if s in arrays]
-        x = encode(encoder, np.concatenate([arrays[s] for s in names]), dev).to(dev).unsqueeze(0)
+        x = encode(encoder, np.concatenate([arrays[s] for s in names]), dev).to(dev)
+        if pca is not None:  # same projection as the training cache: (x - mean) @ components.T
+            x = ((x.float() - pca[0]) @ pca[1].T).half()
+        x = x.unsqueeze(0)
         slot = torch.as_tensor(np.concatenate([np.full(len(arrays[s]), SLOT_NAMES.index(s)) for s in names]), device=dev).unsqueeze(0)
         depth = torch.as_tensor(np.concatenate([np.linspace(0, 1, len(arrays[s])) for s in names]), dtype=torch.float32, device=dev).unsqueeze(0)
         pad = torch.zeros_like(slot, dtype=torch.bool)

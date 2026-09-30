@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knee Results Dashboard</title>
+<!-- Built by scripts/dashboard.py from runs/, meta/ and data/ (metrics and aggregates only). Do not edit runs/dashboard.html. -->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --text: #0b0b0b; --text2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, 0.10); --wash: rgba(11, 11, 11, 0.04);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --deemph: #bdbcb6;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --div-neg: #e34948; --div-mid: #f0efec; --div-pos: #2a78d6; --meter-track: #cde2fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --text: #ffffff; --text2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10); --wash: rgba(255, 255, 255, 0.05);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --deemph: #5f5e5a;
+    --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5; --meter-track: #104281;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --text: #ffffff; --text2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10); --wash: rgba(255, 255, 255, 0.05);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --deemph: #5f5e5a;
+  --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5; --meter-track: #104281;
+}
+* { box-sizing: border-box; }
+html { background: var(--page); }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 16px 64px; }
+header.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; padding: 24px 0 12px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+h3 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+.sub, .note { color: var(--text2); margin: 0; }
+.note { font-size: 13px; max-width: 78ch; }
+.muted { color: var(--muted); }
+.controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: var(--text2); font-size: 13px; }
+select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
+label.controls { min-width: 0; max-width: 100%; }
+button, select { font: inherit; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button[aria-pressed="true"] { background: var(--wash); font-weight: 600; }
+nav.toc { position: sticky; top: 0; z-index: 5; background: var(--page); border-bottom: 1px solid var(--border); padding: 8px 0; display: flex; gap: 16px; overflow-x: auto; white-space: nowrap; font-size: 13px; }
+nav.toc a { color: var(--text2); text-decoration: none; }
+nav.toc a:hover { color: var(--text); }
+section { margin-top: 32px; scroll-margin-top: 48px; }
+.head { margin-bottom: 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.stack > * + * { margin-top: 16px; }
+@media (max-width: 860px) { .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .label { color: var(--text2); font-size: 13px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile .delta { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.hero { display: grid; grid-template-columns: minmax(240px, 1.1fr) 3fr; gap: 12px; }
+@media (max-width: 860px) { .hero { grid-template-columns: minmax(0, 1fr); } }
+.hero .big { font-size: 52px; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text2); margin: 4px 0 6px; }
+.legend .k { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend .k.line { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
+.legend .k.rect { border-radius: 2px; }
+svg { display: block; overflow: visible; }
+svg text { fill: var(--text2); font-size: 12px; }
+svg .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .catlab { fill: var(--text); font-size: 12px; }
+svg .catlab.strong { font-weight: 600; }
+svg .endlab { fill: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .grid { stroke: var(--grid); stroke-width: 1; }
+svg .axis { stroke: var(--axis); stroke-width: 1; }
+svg .refline { stroke: var(--axis); stroke-width: 1.5; }
+svg .connector { stroke: var(--axis); stroke-width: 2; stroke-linecap: round; }
+svg .ci { stroke-width: 2; stroke-linecap: round; opacity: 0.55; }
+svg .dot { stroke: var(--surface); stroke-width: 2; }
+svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+svg .faint { fill: none; stroke-width: 1; opacity: 0.25; }
+svg .hit { fill: transparent; cursor: default; }
+svg .hit:focus { outline: none; }
+svg g.row:hover .dot, svg g.row:focus-within .dot { r: 6.5; }
+svg g.row:hover .bar, svg g.row:focus-within .bar { opacity: 0.8; }
+svg .cross { stroke: var(--muted); stroke-width: 1; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text2); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.ref td { background: var(--wash); }
+.scroll { overflow-x: auto; }
+.pill { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; white-space: nowrap; color: var(--text); }
+.pill .ic { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; }
+details summary { cursor: pointer; color: var(--text2); font-size: 12px; }
+details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-width: 70ch; }
+.heat td.cell { text-align: right; font-variant-numeric: tabular-nums; border-bottom: 2px solid var(--surface); border-right: 2px solid var(--surface); }
+.heat th.col { writing-mode: vertical-rl; transform: rotate(180deg); text-align: left; height: 150px; vertical-align: bottom; font-weight: 500; }
+.meter { height: 10px; border-radius: 5px; background: var(--meter-track); overflow: hidden; }
+.meter > div { height: 100%; background: var(--s1); border-radius: 5px; }
+.rocgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.rocgrid .cell { min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+#tip { position: fixed; z-index: 20; display: none; pointer-events: none; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); font-size: 12px; max-width: 360px; }
+#tip .tt-title { color: var(--text2); margin-bottom: 4px; }
+#tip .tt-row { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+#tip .tt-key { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+#tip .tt-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+#tip .tt-lab { color: var(--text2); white-space: normal; }
+.stale { color: var(--crit); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>RSNA knee · results</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="auto"> Reload every minute while training</label>
+
+    </div>
+  </header>
+  <nav class="toc" aria-label="Sections">
+    <a href="#overview">Overview</a><a href="#live">Training now</a><a href="#runs">Runs</a><a href="#labels">Per label</a>
+    <a href="#reference">Reference model</a><a href="#data">Data</a><a href="#efficiency">Efficiency</a>
+  </nav>
+
+  <section id="overview"><div class="hero" id="hero"></div></section>
+
+  <section id="live">
+    <div class="head"><h2>Training now</h2><p class="note">Validation AUC here is against report labels on the held-out fold, averaged over the folds finished so far.</p></div>
+    <div id="liveBox"></div>
+  </section>
+
+  <section id="runs">
+    <div class="head"><h2>Runs</h2>
+      <p class="note">Every five-fold run. <b>Gold</b> (58 studies) is the arbiter, and differences below about 0.02 are noise there. <b>Report</b> (4,349 studies) is the steadier signal for choosing. Δ columns compare each run with the reference on the same studies (paired bootstrap, 90% interval).</p></div>
+    <div class="grid2">
+      <div class="card"><h3>Report macro AUC</h3><p class="note">4,349 report-only studies, out of fold</p><div id="runsReport"></div></div>
+      <div class="card"><h3>Gold macro AUC</h3><p class="note">58 gold studies, out of fold</p><div id="runsGold"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div><h3>Learning curves</h3><p class="note">Validation macro AUC by epoch, mean over folds; thin lines are single folds.</p></div>
+        <label class="controls">Compare with <select id="cmpSel"></select></label>
+      </div>
+      <div id="curves"></div>
+    </div>
+    <div class="card scroll" style="margin-top:16px"><div id="board"></div></div>
+  </section>
+
+  <section id="labels">
+    <div class="head" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div><h2>Per label</h2><p class="note">AUC per label for every finished run. Colour is the difference from the reference column (blue better, red worse); the reference column is outlined.</p></div>
+      <span class="seg" role="group" aria-label="Metric"><button data-heat="report" aria-pressed="true">Report</button><button data-heat="gold">Gold</button></span>
+    </div>
+    <div class="card scroll"><div id="heat"></div></div>
+  </section>
+
+  <section id="reference">
+    <div class="head"><h2>Reference model</h2><p class="note" id="refNote"></p></div>
+    <div class="grid2">
+      <div class="card"><h3>AUC per label, report labels</h3><p class="note">Dot = out-of-fold AUC, line = 90% bootstrap interval</p><div id="ciReport"></div></div>
+      <div class="card"><h3>AUC per label, gold labels</h3><p class="note">Only 58 studies, so the intervals are wide</p><div id="ciGold"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>ROC curves</h3>
+      <div class="legend"><span><span class="k line" style="background:var(--s1)"></span>Report labels (4,349 studies)</span><span><span class="k line" style="background:var(--s2)"></span>Gold labels (58 studies)</span></div>
+      <div class="rocgrid" id="roc"></div>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>What limits each label</h3>
+        <p class="note">The labeller's agreement with gold is roughly the ceiling for anything trained on its labels. A big gap between it and the model means the image features are the limit; a low labeller score means the labels are.</p>
+        <div id="ceiling"></div></div>
+      <div class="card"><h3>Right vs left knee</h3>
+        <p class="note">Report AUC by knee side. Bold labels sit on one side of the knee, so they land on opposite image sides for left and right knees.</p>
+        <div id="side"></div></div>
+    </div>
+    <details class="card" style="margin-top:16px"><summary>Table: reference model per label</summary><div class="scroll" id="refTable" style="margin-top:8px"></div></details>
+  </section>
+
+  <section id="data">
+    <div class="head"><h2>Data</h2><p class="note">Training studies, labels, series, scanners and knee side. Aggregates only.</p></div>
+    <div class="tiles" id="dataTiles"></div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>Label prevalence</h3><p class="note">Report labels: share of report-only studies with labeller score above 0.5. Gold: share of the 58 gold studies.</p><div id="prev"></div></div>
+      <div class="card stack">
+        <div><h3>Series slots</h3><p class="note">Studies with each preprocessed slot (of all studies)</p><div id="slots"></div></div>
+        <div><h3>Scanner vendor</h3><div id="vendors"></div></div>
+        <div><h3>Field strength</h3><div id="field"></div></div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>Knee side sources</h3><p class="note">Every study gets a side: the DICOM tag when present, otherwise an image probe trained on tagged studies.</p><div id="lat"></div><div class="tiles" id="latTiles" style="margin-top:12px"></div></div>
+      <div class="card stack">
+        <div><h3>Folds</h3><div class="scroll" id="folds"></div></div>
+        <div><h3>Feature caches</h3><div class="scroll" id="caches"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="efficiency">
+    <div class="head"><h2>Efficiency</h2><p class="note" id="effNote"></p></div>
+    <div class="tiles" id="effTiles"></div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>Estimated submission runtime</h3><p class="note">About 1,300 test studies. An estimate from training-time rates, not a measurement.</p><div id="effBar"></div></div>
+      <div class="card scroll"><h3>Cost per run</h3><div id="effTable"></div></div>
+    </div>
+  </section>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>const DATA = /*__DATA__*/null;</script>
+<script>
+"use strict";
+// ------------------------------------------------------------------ helpers
+const $ = (s, r = document) => r.querySelector(s);
+const NS = "http://www.w3.org/2000/svg";
+function S(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function H(tag, attrs, parent, text) {
+  const e = document.createElement(tag);
+  for (const k in attrs || {}) { if (k === "class") e.className = attrs[k]; else if (k === "style") e.style.cssText = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const f3 = v => v == null ? "–" : v.toFixed(3);
+const f4 = v => v == null ? "–" : v.toFixed(4);
+const pct = v => v == null ? "–" : (100 * v).toFixed(1) + "%";
+const sg = (v, d = 3) => v == null ? "–" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d);
+const int = v => v == null ? "–" : Math.round(v).toLocaleString("en-US");
+const compact = v => v == null ? "–" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e4 ? (v / 1e3).toFixed(0) + "K" : int(v);
+const lin = (d0, d1, r0, r1) => v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0);
+function niceTicks(min, max, n = 5) {
+  const raw = (max - min) / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), r = raw / mag;
+  const step = (r > 5 ? 10 : r > 2 ? 5 : r > 1 ? 2 : 1) * mag, out = [];
+  for (let v = Math.ceil(min / step - 1e-9) * step; v <= max + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+const measure = document.createElement("canvas").getContext("2d");
+function fit(text, px, size = 12) {  // truncate to a pixel width with an ellipsis; the tooltip carries the full text
+  measure.font = `${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  if (measure.measureText(text).width <= px) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (measure.measureText(text.slice(0, m) + "…").width <= px) lo = m; else hi = m - 1; }
+  return text.slice(0, lo).trimEnd() + "…";
+}
+const short = (t, n = 44) => !t ? "" : t.length <= n ? t : t.slice(0, n).replace(/\s+\S*$/, "") + "…";
+const runLabel = r => short(r.change.replace(/;\s*vs .*$/, ""), 40);
+
+// ------------------------------------------------------------------ tooltip
+const tip = $("#tip");
+function showTip(ev, title, rows) {
+  tip.replaceChildren();
+  if (title) H("div", { class: "tt-title" }, tip, title);
+  for (const r of rows) {
+    const row = H("div", { class: "tt-row" }, tip);
+    const k = H("span", { class: "tt-key" }, row); k.style.background = r.color || "transparent";
+    H("span", { class: "tt-val" }, row, r.value);
+    if (r.label) H("span", { class: "tt-lab" }, row, r.label);
+  }
+  tip.style.display = "block";
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = ev.clientY - h - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+function bindTip(el, fn) {
+  el.setAttribute("tabindex", "0");
+  el.addEventListener("pointermove", fn);
+  el.addEventListener("pointerleave", hideTip);
+  el.addEventListener("focus", () => { const b = el.getBoundingClientRect(); fn({ clientX: b.left + b.width / 2, clientY: b.top }); });
+  el.addEventListener("blur", hideTip);
+}
+function legend(box, items) {
+  const lg = H("div", { class: "legend" }, box);
+  for (const it of items) {
+    const s = H("span", {}, lg);
+    const k = H("span", { class: "k" + (it.shape ? " " + it.shape : "") }, s); k.style.background = `var(${it.color})`;
+    s.appendChild(document.createTextNode(it.name));
+  }
+}
+
+// ------------------------------------------------------------------ charts
+// Dot plot: categories down, value across. Series share rows (small vertical offset) or form a dumbbell.
+function dotPlot(box, o) {
+  box.replaceChildren();
+  if (o.legend) legend(box, o.legend);
+  const W = Math.max(200, box.clientWidth), labelW = Math.min(o.labelW ?? 132, Math.round(W * 0.42)), rowH = o.rowH ?? 26, top = 6, bottom = 30, right = o.right ?? 52;
+  const Hh = top + o.cats.length * rowH + bottom;
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, role: "img", "aria-label": o.aria || "" }, box);
+  const x = lin(o.domain[0], o.domain[1], labelW, W - right);
+  for (const t of niceTicks(o.domain[0], o.domain[1], o.ticks || 5)) {
+    S("line", { x1: x(t), x2: x(t), y1: top, y2: Hh - bottom, class: "grid" }, s);
+    S("text", { x: x(t), y: Hh - bottom + 16, class: "tick", "text-anchor": "middle" }, s).textContent = (o.tickFmt || (v => v.toFixed(2)))(t);
+  }
+  if (o.xLabel) S("text", { x: (labelW + W - right) / 2, y: Hh - 2, class: "tick", "text-anchor": "middle" }, s).textContent = o.xLabel;
+  if (o.refLine) {
+    S("line", { x1: x(o.refLine.v), x2: x(o.refLine.v), y1: top - 2, y2: Hh - bottom, class: "refline" }, s);
+  }
+  const n = o.series.length, off = i => (n === 1 || o.dumbbell) ? 0 : (i - (n - 1) / 2) * Math.min(6, rowH / (n + 1));
+  o.cats.forEach((c, ci) => {
+    const g = S("g", { class: "row" }, s), y = top + ci * rowH + rowH / 2;
+    S("text", { x: labelW - 10, y: y + 4, class: "catlab" + (o.bold && o.bold.includes(c) ? " strong" : ""), "text-anchor": "end" }, g).textContent = fit(o.catName ? o.catName(c) : c, labelW - 16);
+    if (o.dumbbell) {
+      const vs = o.series.map(se => se.values[c]).filter(v => v != null);
+      if (vs.length === 2) S("line", { x1: x(vs[0]), x2: x(vs[1]), y1: y, y2: y, class: "connector" }, g);
+    }
+    o.series.forEach((se, si) => {
+      const v = se.values[c]; if (v == null) return;
+      const yy = y + off(si), col = se.colorOf ? se.colorOf(c) : se.color, ci_ = se.ci && se.ci[c];
+      if (ci_) S("line", { x1: x(ci_[0]), x2: x(ci_[1]), y1: yy, y2: yy, class: "ci", style: `stroke:var(${col})` }, g);
+      S("circle", { cx: x(v), cy: yy, r: 5, class: "dot", style: `fill:var(${col})` }, g);
+    });
+    if (o.endLabel) S("text", { x: W - right + 8, y: y + 4, class: "endlab" }, g).textContent = o.endLabel(c);
+    const hit = S("rect", { x: 0, y: y - rowH / 2, width: W, height: rowH, class: "hit" }, g);
+    bindTip(hit, ev => showTip(ev, o.catName ? o.catName(c) : c, o.tip ? o.tip(c) : o.series.filter(se => se.values[c] != null).map(se => ({
+      color: `var(${se.colorOf ? se.colorOf(c) : se.color})`,
+      value: f3(se.values[c]) + (se.ci && se.ci[c] ? `  [${f3(se.ci[c][0])}, ${f3(se.ci[c][1])}]` : ""), label: se.name }))));
+  });
+}
+
+// Horizontal bars, one or two series per category; value at the bar tip.
+function barPath(x0, x1, y, h, r = 4) {
+  const w = x1 - x0; if (w <= 0.5) return "";
+  r = Math.min(r, w / 2, h / 2);
+  return `M${x0},${y}H${x1 - r}Q${x1},${y} ${x1},${y + r}V${y + h - r}Q${x1},${y + h} ${x1 - r},${y + h}H${x0}Z`;
+}
+function barH(box, o) {
+  box.replaceChildren();
+  if (o.series.length > 1) legend(box, o.series.map(se => ({ name: se.name, color: se.color, shape: "rect" })));
+  const W = Math.max(200, box.clientWidth), labelW = o.labelW ?? 132, n = o.series.length;
+  const barT = n > 1 ? 10 : 14, rowH = n * barT + (n - 1) * 2 + 12, top = 4;
+  measure.font = "11px system-ui, -apple-system, \"Segoe UI\", sans-serif";
+  const right = 14 + Math.max(24, ...o.cats.flatMap(c => o.series.map(se => measure.measureText((o.fmt || int)(se.values[c] || 0)).width)));
+  const Hh = top + o.cats.length * rowH + 4;
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, role: "img", "aria-label": o.aria || "" }, box);
+  const max = o.max ?? Math.max(...o.cats.flatMap(c => o.series.map(se => se.values[c] || 0)));
+  const x = lin(0, max, labelW, W - right);
+  S("line", { x1: labelW, x2: labelW, y1: top, y2: Hh - 4, class: "axis" }, s);
+  o.cats.forEach((c, ci) => {
+    const g = S("g", { class: "row" }, s), y0 = top + ci * rowH + 6;
+    S("text", { x: labelW - 10, y: y0 + (rowH - 12) / 2 + 4, class: "catlab", "text-anchor": "end" }, g).textContent = fit(o.catName ? o.catName(c) : c, labelW - 16);
+    o.series.forEach((se, si) => {
+      const v = se.values[c] || 0, y = y0 + si * (barT + 2);
+      S("path", { d: barPath(labelW, x(v), y, barT), class: "bar", style: `fill:var(${se.color})` }, g);
+      if (n === 1 || o.labelAll) S("text", { x: x(v) + 6, y: y + barT / 2 + 4, class: "endlab" }, g).textContent = (o.fmt || int)(v);
+    });
+    const hit = S("rect", { x: 0, y: y0 - 6, width: W, height: rowH, class: "hit" }, g);
+    bindTip(hit, ev => showTip(ev, o.catName ? o.catName(c) : c, o.series.map(se => ({ color: `var(${se.color})`, value: (o.fmt || int)(se.values[c] || 0), label: se.name }))
+      .concat(o.extra ? o.extra(c) : [])));
+  });
+}
+
+// One horizontal stacked bar per row, 2px surface gaps between segments.
+function stackBars(box, o) {
+  box.replaceChildren();
+  legend(box, o.segments.map(sg_ => ({ name: sg_.name, color: sg_.color, shape: "rect" })));
+  const W = Math.max(200, box.clientWidth), labelW = o.labelW ?? 110, barT = 18, rowH = 32, Hh = o.rows.length * rowH + 4;
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, role: "img", "aria-label": o.aria || "" }, box);
+  const max = Math.max(...o.rows.map(r => o.segments.reduce((a, sg_) => a + (r.values[sg_.key] || 0), 0)));
+  const x = lin(0, max, labelW, W - 56);
+  o.rows.forEach((r, ri) => {
+    const g = S("g", { class: "row" }, s), y = ri * rowH + 6;
+    S("text", { x: labelW - 10, y: y + barT / 2 + 4, class: "catlab", "text-anchor": "end" }, g).textContent = fit(r.name, labelW - 16);
+    let acc = 0;
+    const segs = o.segments.filter(sg_ => r.values[sg_.key]);
+    segs.forEach((sg_, i) => {
+      const v = r.values[sg_.key], x0 = x(acc) + (i ? 1 : 0), x1 = x(acc + v) - (i < segs.length - 1 ? 1 : 0);
+      const last = i === segs.length - 1;
+      S("path", { d: last ? barPath(x0, x1, y, barT) : `M${x0},${y}H${x1}V${y + barT}H${x0}Z`, class: "bar", style: `fill:var(${sg_.color})` }, g);
+      if (x1 - x0 > 44) S("text", { x: (x0 + x1) / 2, y: y + barT / 2 + 4, "text-anchor": "middle", style: "fill:#fff;font-size:11px" }, g).textContent = int(v);
+      acc += v;
+    });
+    S("text", { x: x(acc) + 6, y: y + barT / 2 + 4, class: "endlab" }, g).textContent = int(acc);
+    const hit = S("rect", { x: 0, y: y - 6, width: W, height: rowH, class: "hit" }, g);
+    bindTip(hit, ev => showTip(ev, r.name, o.segments.map(sg_ => ({ color: `var(${sg_.color})`, value: int(r.values[sg_.key] || 0), label: sg_.name }))));
+  });
+}
+
+// Line chart with a crosshair that snaps to the nearest x and lists every series.
+function lineChart(box, o) {
+  box.replaceChildren();
+  if (o.series.length > 1) legend(box, o.series.map(se => ({ name: se.name, color: se.color, shape: "line" })));
+  const W = Math.max(160, box.clientWidth), Hh = o.height || 260, L = 44, R = 56, T = 8, B = 30;
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, role: "img", "aria-label": o.aria || "" }, box);
+  const all = o.series.flatMap(se => se.pts.concat(...(se.faint || [])));
+  if (!all.length) { S("text", { x: 8, y: 20 }, s).textContent = "No data yet"; return; }
+  const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+  const xd = o.xDomain || [Math.min(...xs), Math.max(...xs)], yd = o.yDomain || [Math.min(...ys) - 0.01, Math.max(...ys) + 0.01];
+  const x = lin(xd[0], xd[1], L, W - R), y = lin(yd[0], yd[1], Hh - B, T);
+  for (const t of niceTicks(yd[0], yd[1], 5)) {
+    S("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), class: "grid" }, s);
+    S("text", { x: L - 6, y: y(t) + 4, class: "tick", "text-anchor": "end" }, s).textContent = (o.yFmt || (v => v.toFixed(2)))(t);
+  }
+  for (const t of niceTicks(xd[0], xd[1], Math.min(8, xd[1] - xd[0] || 1)).filter(v => Number.isInteger(v) || !o.integerX)) {
+    S("text", { x: x(t), y: Hh - B + 16, class: "tick", "text-anchor": "middle" }, s).textContent = o.xFmt ? o.xFmt(t) : t;
+  }
+  S("line", { x1: L, x2: W - R, y1: Hh - B, y2: Hh - B, class: "axis" }, s);
+  if (o.xLabel) S("text", { x: W - R, y: Hh - 2, class: "tick", "text-anchor": "end" }, s).textContent = o.xLabel;
+  const path = pts => pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join("");
+  for (const se of o.series) for (const f of se.faint || []) if (f.length) S("path", { d: path(f), class: "faint", style: `stroke:var(${se.color})` }, s);
+  const ends = o.series.filter(se => se.pts.length).map(se => y(se.pts[se.pts.length - 1][1]));
+  const clear = o.series.length <= 3 && ends.every((a, i) => ends.every((b, j) => i === j || Math.abs(a - b) >= 13));
+  for (const se of o.series) {
+    if (!se.pts.length) continue;
+    S("path", { d: path(se.pts), class: "line", style: `stroke:var(${se.color})` }, s);
+    const lp = se.pts[se.pts.length - 1];
+    if (!o.noEndDot) S("circle", { cx: x(lp[0]), cy: y(lp[1]), r: 4.5, class: "dot", style: `fill:var(${se.color})` }, s);
+    if (clear) S("text", { x: x(lp[0]) + 8, y: y(lp[1]) + 4, class: "endlab" }, s).textContent = (o.yFmt || f3)(lp[1]);
+  }
+  const cross = S("line", { y1: T, y2: Hh - B, class: "cross", style: "display:none" }, s);
+  const hit = S("rect", { x: L, y: T, width: W - L - R, height: Hh - T - B, class: "hit" }, s);
+  const xsAll = [...new Set(o.series.flatMap(se => se.pts.map(p => p[0])))].sort((a, b) => a - b);
+  const at = xv => { const ev = hit.getBoundingClientRect(); return { clientX: ev.left + x(xv) - L, clientY: ev.top + 10 }; };
+  const show = (ev, xv) => {
+    cross.setAttribute("x1", x(xv)); cross.setAttribute("x2", x(xv)); cross.style.display = "";
+    showTip(ev, (o.xName || "x") + " " + (o.xFmt ? o.xFmt(xv) : xv), o.series.map(se => {
+      const p = se.pts.find(q => q[0] === xv) || (o.interp ? [xv, interp(se.pts, xv)] : null);
+      return { color: `var(${se.color})`, value: p ? (o.yFmt || f3)(p[1]) : "–", label: se.name };
+    }));
+  };
+  hit.setAttribute("tabindex", "0");
+  hit.addEventListener("pointermove", ev => {
+    const b = hit.getBoundingClientRect(), xv = xd[0] + (ev.clientX - b.left) / b.width * (xd[1] - xd[0]);
+    const near = o.interp ? Math.round(xv * 100) / 100 : xsAll.reduce((a, c) => Math.abs(c - xv) < Math.abs(a - xv) ? c : a, xsAll[0]);
+    show(ev, Math.max(xd[0], Math.min(xd[1], near)));
+  });
+  hit.addEventListener("pointerleave", () => { cross.style.display = "none"; hideTip(); });
+  hit.addEventListener("focus", () => show(at(xsAll[xsAll.length - 1]), xsAll[xsAll.length - 1]));
+  hit.addEventListener("blur", () => { cross.style.display = "none"; hideTip(); });
+}
+function interp(pts, xv) {
+  for (let i = 1; i < pts.length; i++) if (pts[i][0] >= xv) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    return x1 === x0 ? Math.max(y0, y1) : y0 + (y1 - y0) * (xv - x0) / (x1 - x0);
+  }
+  return pts.length ? pts[pts.length - 1][1] : null;
+}
+
+// ------------------------------------------------------------------ data helpers
+const D = DATA, LABELS = D.labels;
+const ref = D.runs.find(r => r.id === D.reference);
+const done = D.runs.filter(r => r.status === "done");
+const running = D.runs.filter(r => r.status === "running");
+function foldMean(hist) {
+  const folds = Object.values(hist || {}), n = Math.max(0, ...folds.map(f => f.length)), out = [];
+  for (let e = 0; e < n; e++) { const v = folds.map(f => f[e]).filter(x => x != null); if (v.length) out.push([e + 1, v.reduce((a, b) => a + b, 0) / v.length]); }
+  return out;
+}
+const foldLines = hist => Object.values(hist || {}).map(f => f.map((v, i) => [i + 1, v]).filter(p => p[1] != null));
+const VERDICT = {
+  reference: ["✓", "--good", "Reference"], adopted: ["✓", "--good", "Adopted"], neutral: ["–", "--warn", "Neutral"],
+  rejected: ["✕", "--crit", "Rejected"], superseded: ["↑", "--muted", "Superseded"], baseline: ["B", "--muted", "Baseline"], running: ["●", "--s1", "Running"], stopped: ["■", "--muted", "Stopped"], "": ["?", "--muted", "No verdict"],
+};
+function pill(parent, r) {
+  const v = r.status === "running" ? "running" : r.status === "stopped" ? "stopped" : r.verdict || "";
+  const [ic, col, name] = VERDICT[v];
+  const p = H("span", { class: "pill" }, parent);
+  const i = H("span", { class: "ic" }, p, ic); i.style.background = `var(${col})`; if (v === "neutral") i.style.color = "#0b0b0b";
+  p.appendChild(document.createTextNode(name));
+}
+
+// ------------------------------------------------------------------ sections
+function renderHeader() {
+  const built = new Date(D.built), age = (Date.now() - built) / 60000;
+  const sub = $("#sub"); sub.replaceChildren();
+  sub.appendChild(document.createTextNode(`Built ${built.toLocaleString()} · reference run ${D.reference} · `));
+  const dl = D.deadlines.map(d => `${d.name.toLowerCase()} in ${d.days} days (${d.date})`).join(", ");
+  sub.appendChild(document.createTextNode(dl));
+  if (running.length && age > 5) H("span", { class: "stale" }, sub, ` · ${Math.round(age)} min old: rebuild with python scripts/dashboard.py`);
+}
+
+function renderOverview() {
+  const box = $("#hero"); box.replaceChildren();
+  const hero = H("div", { class: "tile" }, box);
+  H("div", { class: "label" }, hero, "Gold macro AUC · reference model");
+  H("div", { class: "big" }, hero, f3(ref.gold));
+  H("div", { class: "delta" }, hero, `58 gold studies, out of fold · ${short(ref.change, 60)}`);
+  const tiles = H("div", { class: "tiles" }, box);
+  const tile = (label, value, delta) => { const t = H("div", { class: "tile" }, tiles); H("div", { class: "label" }, t, label); H("div", { class: "value" }, t, value); if (delta) H("div", { class: "delta" }, t, delta); };
+  tile("Report macro AUC", f3(ref.report), "4,349 report-only studies");
+  const adopted = done.filter(r => r.verdict === "adopted").pop();
+  const ens = adopted || done.filter(r => r.kind === "ensemble").sort((a, b) => b.report - a.report)[0];
+  if (ens) tile(adopted ? "Submission candidate, report" : "Best ensemble, report", f3(ens.report),
+                `gold ${f3(ens.gold)} · ${ens.members ? ens.members.length + " runs × 5 folds" : short(ens.change, 30)}`);
+  const bestSingle = done.filter(r => r.kind === "single").sort((a, b) => b.report - a.report)[0];
+  if (bestSingle && bestSingle.id !== ref.id) tile("Best single run, report", f3(bestSingle.report), runLabel(bestSingle));
+  const counts = { rejected: 0, neutral: 0, adopted: 0 };
+  done.forEach(r => { if (counts[r.verdict] != null) counts[r.verdict]++; });
+  tile("Finished runs", int(done.length), `${counts.adopted} adopted · ${counts.neutral} neutral · ${counts.rejected} rejected`);
+  tile("Training now", running.length ? `${running[0].progress[0]} / ${running[0].progress[1]}` : "idle",
+       running.length ? `epochs · ETA ${running[0].eta_min ?? "?"} min` : "no run in progress");
+  for (const d of D.deadlines) tile(d.name, `${d.days} days`, d.date);
+}
+
+function renderLive() {
+  const box = $("#liveBox"); box.replaceChildren();
+  if (!running.length) {
+    const c = H("div", { class: "card" }, box);
+    H("p", { class: "note" }, c, "No run in progress. Queue the next one with runs/queue*.sh (see runbook.txt).");
+    return;
+  }
+  for (const r of running) {
+    const c = H("div", { class: "card" }, box), top = H("div", { class: "grid2" }, c), left = H("div", {}, top), right = H("div", {}, top);
+    H("h3", {}, left, r.change);
+    H("p", { class: "note" }, left, `Run ${r.id} · started ${r.started ? new Date(r.started).toLocaleTimeString() : "?"}`);
+    const m = H("div", { class: "meter", style: "margin:12px 0 6px", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(r.progress[1]), "aria-valuenow": String(r.progress[0]) }, left);
+    H("div", { style: `width:${100 * r.progress[0] / r.progress[1]}%` }, m);
+    const last = r.last || {};
+    const t = H("div", { class: "tiles", style: "margin-top:12px" }, left);
+    const tile = (l, v, d) => { const x = H("div", { class: "tile" }, t); H("div", { class: "label" }, x, l); H("div", { class: "value" }, x, v); if (d) H("div", { class: "delta" }, x, d); };
+    tile("Progress", `${r.progress[0]} / ${r.progress[1]}`, `fold ${last.fold ?? "?"} · epoch ${last.epoch ?? "?"}`);
+    tile("Latest val AUC", f3(last.val_macro_auc), "report labels, this fold");
+    tile("Time left", r.eta_min != null ? `${r.eta_min} min` : "?", "from the average epoch so far");
+    const cv = H("div", {}, right);
+    lineChart(cv, { series: [
+        { name: "Reference " + ref.id, color: "--s1", pts: foldMean(ref.history) },
+        { name: "This run", color: "--s2", pts: foldMean(r.history), faint: foldLines(r.history) }],
+      integerX: true, xName: "epoch", xLabel: "epoch", height: 220, aria: "Validation AUC by epoch, this run against the reference" });
+  }
+}
+
+function renderRuns() {
+  const rs = done.slice();
+  const cats = rs.map(r => r.id), nameOf = id => runLabel(rs.find(r => r.id === id));
+  const colorOf = id => id === ref.id ? "--s1" : rs.find(r => r.id === id).kind === "ensemble" ? "--s2" : "--deemph";
+  const leg = [{ name: "Reference", color: "--s1" }, { name: "Other runs", color: "--deemph" }].concat(rs.some(r => r.kind === "ensemble") ? [{ name: "Ensemble", color: "--s2" }] : []);
+  for (const [box, key, vs] of [["#runsReport", "report", "report"], ["#runsGold", "gold", "gold"]]) {
+    const vals = Object.fromEntries(rs.map(r => [r.id, r[key]]));
+    const v = Object.values(vals).filter(x => x != null);
+    dotPlot($(box), { cats, catName: nameOf, labelW: 190, legend: leg, refLine: { v: ref[key] },
+      domain: [Math.floor((Math.min(...v) - 0.01) * 100) / 100, Math.ceil((Math.max(...v) + 0.005) * 100) / 100],
+      series: [{ name: key, values: vals, colorOf }], endLabel: c => f3(vals[c]),
+      tip: c => { const r = rs.find(x => x.id === c), d = r.vs_ref && r.vs_ref[vs];
+        return [{ color: `var(${colorOf(c)})`, value: f4(r[key]), label: `${key} macro AUC · run ${r.id}` }]
+          .concat(d ? [{ value: `${sg(d.diff, 4)} [${sg(d.lo, 4)}, ${sg(d.hi, 4)}]`, label: `vs reference, 90% CI · P(better) ${d.p_better.toFixed(2)}` }] : [{ value: "", label: c === ref.id ? "this is the reference" : "" }]); },
+      aria: `${key} macro AUC per run` });
+  }
+  // learning curves
+  const sel = $("#cmpSel"); const prev = sel.value; sel.replaceChildren();
+  for (const r of D.runs.filter(r => r.id !== ref.id && Object.keys(r.history || {}).length))
+    H("option", { value: r.id }, sel, `${r.id} · ${short(r.change, 50)}`);
+  sel.value = prev && [...sel.options].some(o => o.value === prev) ? prev : (running[0] || rs[rs.length - 1] || {}).id || "";
+  const drawCurves = () => {
+    const other = D.runs.find(r => r.id === sel.value);
+    const series = [{ name: `Reference ${ref.id}`, color: "--s1", pts: foldMean(ref.history), faint: foldLines(ref.history) }];
+    if (other) series.push({ name: short(other.change, 50), color: "--s2", pts: foldMean(other.history), faint: foldLines(other.history) });
+    lineChart($("#curves"), { series, integerX: true, xName: "epoch", xLabel: "epoch", aria: "Learning curves" });
+  };
+  sel.onchange = drawCurves; drawCurves();
+  // leaderboard
+  const box = $("#board"); box.replaceChildren();
+  const t = H("table", {}, box), hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, num] of [["Verdict"], ["Run"], ["Change"], ["Gold", 1], ["Δ gold (90% CI)", 1], ["Report", 1], ["Δ report (90% CI)", 1], ["P(better)", 1], ["Train min", 1], ["Head params", 1], ["Features"], ["Seed", 1]])
+    H("th", num ? { class: "num" } : {}, hd, c);
+  const tb = H("tbody", {}, t);
+  for (const r of D.runs.slice().reverse()) {
+    const tr = H("tr", r.id === ref.id ? { class: "ref" } : {}, tb);
+    pill(H("td", {}, tr), r);
+    H("td", {}, tr, r.id);
+    const ch = H("td", {}, tr); H("div", {}, ch, r.change);
+    if (r.notes) { const d = H("details", {}, ch); H("summary", {}, d, "notes"); H("div", { class: "notes" }, d, r.notes); }
+    const dg = r.vs_ref && r.vs_ref.gold, dr = r.vs_ref && r.vs_ref.report;
+    H("td", { class: "num" }, tr, f4(r.gold));
+    H("td", { class: "num" }, tr, dg ? `${sg(dg.diff)} [${sg(dg.lo)}, ${sg(dg.hi)}]` : r.id === ref.id ? "reference" : "–");
+    H("td", { class: "num" }, tr, f4(r.report));
+    H("td", { class: "num" }, tr, dr ? `${sg(dr.diff)} [${sg(dr.lo)}, ${sg(dr.hi)}]` : r.id === ref.id ? "reference" : "–");
+    H("td", { class: "num" }, tr, dr ? dr.p_better.toFixed(2) : "–");
+    H("td", { class: "num" }, tr, r.minutes != null ? r.minutes.toFixed(1) : "–");
+    H("td", { class: "num" }, tr, compact(r.params));
+    H("td", {}, tr, [r.feats, r.canon ? "canon" : "", r.slice_drop ? `slice-drop ${r.slice_drop}` : "", r.epochs && r.epochs !== 12 ? `${r.epochs} ep` : ""].filter(Boolean).join(" · "));
+    H("td", { class: "num" }, tr, r.seed ?? "–");
+  }
+}
+
+let heatMetric = "report";
+function divColor(d, scale) {
+  const a = Math.max(-1, Math.min(1, d / scale)) * 0.8, lerp = (c1, c2, t) => c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const mid = hex(cssv("--div-mid")), end = hex(cssv(a >= 0 ? "--div-pos" : "--div-neg")), c = lerp(mid, end, Math.abs(a));
+  const lum = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+  return { bg: `rgb(${c.join(",")})`, fg: lum > 0.55 ? "#0b0b0b" : "#ffffff" };
+}
+function renderHeat() {
+  const box = $("#heat"); box.replaceChildren();
+  const rs = done, key = heatMetric + "_by_label", scale = heatMetric === "gold" ? 0.06 : 0.02;
+  const t = H("table", { class: "heat" }, box), hd = H("tr", {}, H("thead", {}, t));
+  H("th", {}, hd, "Label");
+  for (const r of rs) { const th = H("th", { class: "col", title: `${r.id}: ${r.change}` }, hd, fit(r.change.replace(/;\s*vs .*$/, ""), 140)); if (r.id === ref.id) th.style.fontWeight = "700"; }
+  const tb = H("tbody", {}, t);
+  const rows = LABELS.concat(["Macro"]);
+  for (const l of rows) {
+    const tr = H("tr", {}, tb); H("th", {}, tr, l);
+    const refv = l === "Macro" ? ref[heatMetric] : ref[key][l];
+    for (const r of rs) {
+      const v = l === "Macro" ? r[heatMetric] : r[key][l];
+      const td = H("td", { class: "cell" }, tr, v == null ? "–" : v.toFixed(3));
+      if (r.id === ref.id) { td.style.outline = `2px solid var(--text2)`; td.style.outlineOffset = "-2px"; continue; }
+      if (v != null && refv != null) { const c = divColor(v - refv, scale); td.style.background = c.bg; td.style.color = c.fg; }
+      td.title = `${l} · ${r.id}\n${heatMetric} AUC ${v == null ? "–" : v.toFixed(4)} (${v != null && refv != null ? sg(v - refv, 4) : "–"} vs reference)`;
+    }
+  }
+}
+
+function renderReference() {
+  const R = D.ref, rep = R.ci.report, gold = R.ci.gold;
+  $("#refNote").textContent = `Run ${ref.id}: ${ref.change}. Out-of-fold predictions on ${int(R.n_report)} report-only and ${R.n_gold} gold studies.`;
+  const order = LABELS.slice().sort((a, b) => (rep[b] ? rep[b][0] : 0) - (rep[a] ? rep[a][0] : 0));
+  const mk = (ci, box, macroV, lo) => dotPlot($(box), { cats: order, series: [{ name: "AUC", color: "--s1",
+      values: Object.fromEntries(order.map(l => [l, ci[l] ? ci[l][0] : null])), ci: Object.fromEntries(order.map(l => [l, ci[l] ? [ci[l][1], ci[l][2]] : null])) }],
+    domain: [lo, 1], refLine: { v: macroV }, endLabel: l => ci[l] ? f3(ci[l][0]) : "–", aria: "AUC per label with intervals" });
+  mk(rep, "#ciReport", ref.report, 0.6);
+  mk(gold, "#ciGold", ref.gold, Math.min(0.3, Math.floor(Math.min(...Object.values(gold).map(v => v[1])) * 10) / 10));
+  // ROC grid
+  const grid = $("#roc"); grid.replaceChildren();
+  for (const l of order) {
+    const c = H("div", { class: "cell" }, grid), rc = R.roc[l];
+    H("h3", {}, c, l);
+    H("p", { class: "note", style: "font-size:12px" }, c, `report ${f3(ref.report_by_label[l])} · gold ${f3(ref.gold_by_label[l])} · ${rc.n_pos_gold} gold positives`);
+    const box = H("div", {}, c);
+    lineChart(box, { series: [{ name: "Report labels", color: "--s1", pts: rc.report }, { name: "Gold labels", color: "--s2", pts: rc.gold }],
+      xDomain: [0, 1], yDomain: [0, 1], height: 190, interp: true, xName: "false-positive rate", yFmt: v => v.toFixed(2),
+      xFmt: v => v.toFixed(2), noEndDot: true, aria: `ROC curve for ${l}` });
+    box.querySelector(".legend") && box.querySelector(".legend").remove();
+    const s = box.querySelector("svg"), W = +s.getAttribute("width"), Hh = +s.getAttribute("height");
+    S("line", { x1: 44, y1: Hh - 30, x2: W - 56, y2: 8, class: "grid" }, s);  // chance diagonal
+    s.querySelectorAll(".endlab").forEach(e => e.remove());
+  }
+  // label ceiling
+  const lab = R.labeller_vs_gold;
+  const ord2 = LABELS.slice().sort((a, b) => (lab[b] || 0) - (lab[a] || 0));
+  dotPlot($("#ceiling"), { cats: ord2, domain: [0.4, 1],
+    legend: [{ name: "Labeller vs gold", color: "--s3" }, { name: "Model, report labels", color: "--s1" }, { name: "Model, gold labels", color: "--s2" }],
+    series: [{ name: "Labeller vs gold", color: "--s3", values: Object.fromEntries(ord2.map(l => [l, lab[l]])) },
+             { name: "Model, report labels", color: "--s1", values: ref.report_by_label },
+             { name: "Model, gold labels", color: "--s2", values: ref.gold_by_label }],
+    catName: l => R.labeller_column[l] !== l ? `${l} (${R.labeller_column[l].split("@")[1]})` : l, labelW: 150, aria: "Labeller agreement against model AUC per label" });
+  // knee side
+  const sd = R.side, ord3 = LABELS.slice().sort((a, b) => (sd[a].L - sd[a].R) - (sd[b].L - sd[b].R));
+  dotPlot($("#side"), { cats: ord3, dumbbell: true, bold: R.one_sided, domain: [0.6, 0.9],
+    legend: [{ name: `Right knee (n=${int(sd[LABELS[0]].nR)})`, color: "--s1" }, { name: `Left knee (n=${int(sd[LABELS[0]].nL)})`, color: "--s2" }],
+    series: [{ name: "Right knee", color: "--s1", values: Object.fromEntries(ord3.map(l => [l, sd[l].R])) },
+             { name: "Left knee", color: "--s2", values: Object.fromEntries(ord3.map(l => [l, sd[l].L])) }],
+    endLabel: l => sg(sd[l].L - sd[l].R), aria: "Report AUC by knee side" });
+  // table view
+  const tb = $("#refTable"); tb.replaceChildren();
+  const t = H("table", {}, tb), hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, n] of [["Label"], ["Report AUC", 1], ["90% CI", 1], ["Gold AUC", 1], ["90% CI", 1], ["Gold positives", 1], ["Labeller vs gold", 1], ["Right", 1], ["Left", 1]]) H("th", n ? { class: "num" } : {}, hd, c);
+  const body = H("tbody", {}, t);
+  for (const l of order) {
+    const tr = H("tr", {}, body); H("td", {}, tr, l);
+    H("td", { class: "num" }, tr, rep[l] ? f3(rep[l][0]) : "–"); H("td", { class: "num" }, tr, rep[l] ? `${f3(rep[l][1])}–${f3(rep[l][2])}` : "–");
+    H("td", { class: "num" }, tr, gold[l] ? f3(gold[l][0]) : "–"); H("td", { class: "num" }, tr, gold[l] ? `${f3(gold[l][1])}–${f3(gold[l][2])}` : "–");
+    H("td", { class: "num" }, tr, R.roc[l].n_pos_gold); H("td", { class: "num" }, tr, f3(lab[l]));
+    H("td", { class: "num" }, tr, f3(sd[l].R)); H("td", { class: "num" }, tr, f3(sd[l].L));
+  }
+}
+
+const SLOT_NAMES = { sag_fs: "Sagittal fat-sat", cor_fs: "Coronal fat-sat", ax_fs: "Axial fat-sat", t1: "T1 (cor. or sag.)" };
+function renderData() {
+  const d = D.data, tiles = $("#dataTiles"); tiles.replaceChildren();
+  const tile = (box, l, v, s) => { const t = H("div", { class: "tile" }, box); H("div", { class: "label" }, t, l); H("div", { class: "value" }, t, v); if (s) H("div", { class: "delta" }, t, s); };
+  tile(tiles, "Training studies", int(d.studies), `${int(d.report_studies)} report-only · ${d.gold_studies} gold`);
+  tile(tiles, "Gold studies", int(d.gold_studies), `${(100 * d.gold_studies / d.studies).toFixed(1)}% of studies`);
+  tile(tiles, "Slices cached", compact(d.slices), `${int(d.series)} series`);
+  tile(tiles, "Slices per study", int(d.slices_per_study.median), `median · 10–90%: ${int(d.slices_per_study.p10)}–${int(d.slices_per_study.p90)}`);
+  tile(tiles, "Labeller vs gold", f3(d.labeller_macro), "macro AUC, Qwen2.5-7B labeller");
+  const prevCats = LABELS.slice().sort((a, b) => d.prevalence[b].report - d.prevalence[a].report);
+  barH($("#prev"), { cats: prevCats, max: Math.max(...LABELS.map(l => Math.max(d.prevalence[l].report, d.prevalence[l].gold))), fmt: pct, labelAll: true,
+    series: [{ name: "Report labels", color: "--s1", values: Object.fromEntries(LABELS.map(l => [l, d.prevalence[l].report])) },
+             { name: "Gold labels", color: "--s2", values: Object.fromEntries(LABELS.map(l => [l, d.prevalence[l].gold])) }],
+    extra: l => [{ value: int(d.prevalence[l].gold_pos), label: "gold positives" }], aria: "Label prevalence" });
+  const slotCats = Object.keys(SLOT_NAMES).filter(s => d.slot_coverage[s] != null);
+  barH($("#slots"), { cats: slotCats, catName: s => SLOT_NAMES[s], max: d.studies, fmt: v => `${int(v)} (${pct(v / d.studies)})`,
+    series: [{ name: "Studies", color: "--s1", values: d.slot_coverage }], extra: s => [{ value: int(d.slot_slices[s]), label: "median slices kept" }], aria: "Series slot coverage" });
+  const vend = Object.keys(d.vendors).sort((a, b) => d.vendors[b] - d.vendors[a]);
+  barH($("#vendors"), { cats: vend, series: [{ name: "Studies", color: "--s1", values: d.vendors }], aria: "Scanner vendor" });
+  const fsC = Object.keys(d.field_strength).sort((a, b) => d.field_strength[b] - d.field_strength[a]);
+  barH($("#field"), { cats: fsC, series: [{ name: "Studies", color: "--s1", values: d.field_strength }], aria: "Field strength" });
+  const L = d.laterality;
+  stackBars($("#lat"), { segments: [{ key: "R", name: "Right knee", color: "--s1" }, { key: "L", name: "Left knee", color: "--s2" }],
+    rows: [{ name: "DICOM tag", values: L.tag }, { name: "Image probe", values: L.image }], aria: "Knee side by source" });
+  const lt = $("#latTiles"); lt.replaceChildren();
+  tile(lt, "Image probe vs tag", pct(L.probe_vs_tag), `${int(L.n_tagged)} tagged studies, out of fold`);
+  tile(lt, "Report side vs tag", pct(L.report_vs_tag), `${int(L.n_report_and_tag)} studies with both`);
+  const ft = $("#folds"); ft.replaceChildren();
+  let t = H("table", {}, ft), hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, n] of [["Fold"], ["Studies", 1], ["Gold studies", 1]]) H("th", n ? { class: "num" } : {}, hd, c);
+  let body = H("tbody", {}, t);
+  for (const f of d.folds) { const tr = H("tr", {}, body); H("td", {}, tr, f.fold); H("td", { class: "num" }, tr, int(f.studies)); H("td", { class: "num" }, tr, f.gold); }
+  const ct = $("#caches"); ct.replaceChildren();
+  t = H("table", {}, ct); hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, n] of [["Cache"], ["Tokens × dims", 1], ["Size", 1], ["Variance kept", 1]]) H("th", n ? { class: "num" } : {}, hd, c);
+  body = H("tbody", {}, t);
+  for (const c of d.caches) { const tr = H("tr", {}, body); H("td", {}, tr, c.name); H("td", { class: "num" }, tr, `${c.tokens} × ${c.dim}`); H("td", { class: "num" }, tr, `${c.gb} GB`); H("td", { class: "num" }, tr, c.variance_kept ? pct(c.variance_kept) : "all"); }
+}
+
+function renderEfficiency() {
+  const e = D.efficiency;
+  $("#effNote").textContent = "Efficiency track score = AUC / (0.5 − best private AUC) + runtime seconds / 32,400; lower is better. With a best AUC near 0.90, one hour of runtime costs about 0.044 AUC. No submission has been measured yet, so runtime below is estimated.";
+  const box = $("#effTiles"); box.replaceChildren();
+  const tile = (l, v, s) => { const t = H("div", { class: "tile" }, box); H("div", { class: "label" }, t, l); H("div", { class: "value" }, t, v); if (s) H("div", { class: "delta" }, t, s); };
+  tile("Estimated runtime", `${e.total_min} min`, "whole test set, not measured");
+  tile("Runtime cost", `≈ ${e.auc_equiv_at_090.toFixed(3)} AUC`, "score penalty, if the best AUC is 0.90");
+  tile("Head size", compact(ref.params), "parameters per fold head (reference)");
+  const pca = D.data.caches.find(c => c.name.includes("pca")), full = D.data.caches.find(c => !c.name.includes("pca"));
+  if (pca && full) tile("Feature cache", `${pca.gb} GB`, `PCA-${pca.dim}, vs ${full.gb} GB full`);
+  tile("Encoder throughput", `${int(e.encoder_rate)}/s`, "slices per second, DINOv2-S on Kaggle GPU");
+  stackBars($("#effBar"), { labelW: 90, segments: [
+      { key: "p", name: `DICOM read + preprocess · ${e.preprocess_min} min`, color: "--s1" }, { key: "e", name: `Frozen encoder · ${e.encode_min} min`, color: "--s2" },
+      { key: "s", name: `Setup · ${e.setup_min} min`, color: "--s3" }, { key: "h", name: `Heads · ${e.heads_min} min`, color: "--deemph" }],
+    rows: [{ name: "Minutes", values: { p: e.preprocess_min, e: e.encode_min, s: e.setup_min, h: e.heads_min } }], aria: "Estimated runtime breakdown" });
+  const tb = $("#effTable"); tb.replaceChildren();
+  const t = H("table", {}, tb), hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, n] of [["Run"], ["Train min (Mac)", 1], ["Heads at inference", 1], ["Params per head", 1], ["Report AUC", 1]]) H("th", n ? { class: "num" } : {}, hd, c);
+  const body = H("tbody", {}, t);
+  for (const r of done) {
+    const tr = H("tr", r.id === ref.id ? { class: "ref" } : {}, body);
+    H("td", {}, tr, runLabel(r)); H("td", { class: "num" }, tr, r.minutes != null ? r.minutes.toFixed(1) : "–");
+    H("td", { class: "num" }, tr, r.kind === "ensemble" ? 5 * (r.members ? r.members.length : 1) : 5);
+    H("td", { class: "num" }, tr, compact(r.params)); H("td", { class: "num" }, tr, f3(r.report));
+  }
+  H("p", { class: "note", style: "margin-top:8px" }, tb, "Training minutes include any time the Mac spent memory-bound or asleep (see the run notes). A head costs milliseconds per study; the encoder and DICOM reading dominate runtime.");
+}
+
+// ------------------------------------------------------------------ theme, refresh, layout
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
+  document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto"))));
+}
+function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderHeat(); renderReference(); renderData(); renderEfficiency(); }
+applyTheme(store.get("theme") || "auto");
+document.querySelectorAll("[data-theme-set]").forEach(b => b.addEventListener("click", () => { store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet); renderAll(); }));
+document.querySelectorAll("[data-heat]").forEach(b => b.addEventListener("click", () => {
+  heatMetric = b.dataset.heat; document.querySelectorAll("[data-heat]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderHeat(); }));
+const auto = $("#auto");
+auto.checked = (store.get("auto") ?? "1") === "1";
+auto.addEventListener("change", () => store.set("auto", auto.checked ? "1" : "0"));
+try { const y = sessionStorage.getItem("dashY"); if (y) { sessionStorage.removeItem("dashY"); addEventListener("load", () => scrollTo(0, +y)); } } catch (e) {}
+setInterval(() => { if (auto.checked && running.length) { try { sessionStorage.setItem("dashY", String(scrollY)); } catch (e) {} location.reload(); } }, 60000);
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+renderAll();
+</script>
+</body>
+</html>

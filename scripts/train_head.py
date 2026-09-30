@@ -37,6 +37,16 @@ def aucs(oof, ids, truth):
     return res
 
 
+def refresh_dashboard():
+    """Rebuild runs/dashboard.html in the background; never blocks or fails training."""
+    try:
+        import subprocess
+        subprocess.Popen([sys.executable, str(ROOT / "scripts/dashboard.py"), "--quiet"], cwd=ROOT,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
 def evaluate(model, dl, dev):
     """-> (sigmoid predictions [n, 12] in dataset order, mean BCE against the training targets)."""
     lossf = torch.nn.BCEWithLogitsLoss(reduction="sum")
@@ -58,6 +68,8 @@ def main():
     p.add_argument("--label-map", default="{}", help='JSON {label: column} to use a variant column, e.g. {"Effusion": "Effusion@moderate"}')
     p.add_argument("--canon", default="", help="meta/laterality.csv: mirror left knees into right-knee layout (medial on one side)")
     p.add_argument("--slice-drop", type=float, default=0.0, help="training: drop each slice with this probability")
+    p.add_argument("--slot-drop", type=float, default=0.1, help="training: drop each series slot with this probability")
+    p.add_argument("--gold-repeat", type=int, default=1, help="training: list each gold study this many times per epoch")
     p.add_argument("--folds", default="0,1,2,3,4")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--bs", type=int, default=16)
@@ -65,6 +77,7 @@ def main():
     p.add_argument("--wd", type=float, default=0.05)
     p.add_argument("--d", type=int, default=256)
     p.add_argument("--layers", type=int, default=1)
+    p.add_argument("--drop", type=float, default=0.1, help="dropout in the head (input projection, transformer, pooling)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--log", default="", help="append a row to experiments.md with this change description")
@@ -77,6 +90,7 @@ def main():
     run_id = time.strftime("%Y%m%d-%H%M%S")
     out = ROOT / "runs" / run_id
     out.mkdir(parents=True)
+    (out / "args.json").write_text(json.dumps(vars(args), indent=1))  # lets the results viewer label a run mid-training
 
     # ---- data ----
     fd = Path(args.feats)
@@ -109,13 +123,14 @@ def main():
     print(f"live progress: {out / 'progress.png'}", flush=True)
     for f in fold_list:
         tr = folds.StudyInstanceUID[folds.fold != f].tolist()
+        tr += [u for u in tr if u in gold_ids] * (args.gold_repeat - 1)  # upweight gold labels by repetition
         va = folds.StudyInstanceUID[folds.fold == f].tolist()
         dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f, left=left,
-                                                    slice_drop=args.slice_drop), batch_size=args.bs,
+                                                    slice_drop=args.slice_drop, slot_drop=args.slot_drop), batch_size=args.bs,
                                             shuffle=True, collate_fn=collate, num_workers=args.workers, persistent_workers=args.workers > 0)
         dl_va = torch.utils.data.DataLoader(Studies(va, index, feats, targets, left=left), batch_size=args.bs * 2, collate_fn=collate,
                                             num_workers=args.workers)
-        model = Head(T, C, args.d, len(LABELS), args.layers).to(dev)
+        model = Head(T, C, args.d, len(LABELS), args.layers, drop=args.drop).to(dev)
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
         steps = args.epochs * len(dl_tr)
         sched = torch.optim.lr_scheduler.OneCycleLR(opt, args.lr, total_steps=steps, pct_start=0.1)
@@ -138,9 +153,10 @@ def main():
                         val_auc=aucs(fold_oof, va_rep, (report > 0.5).astype(int)))
         torch.save(model.state_dict(), out / f"head_fold{f}.pt")
         oof.append(fold_oof.assign(fold=f))
+        refresh_dashboard()
     oof = pd.concat(oof)
     oof.to_csv(out / "oof.csv", index=False)
-    (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers,
+    (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers, "drop": args.drop,
                                                  "labels": LABELS, "label_map": label_map, "feats": str(fd),
                                                  "canon": bool(args.canon)}, indent=1))
 
@@ -165,6 +181,7 @@ def main():
         with open(ROOT / "experiments.md", "a") as fh:
             fh.write(row)
         print("logged to experiments.md")
+    refresh_dashboard()
 
 
 if __name__ == "__main__":  # DataLoader workers are spawned on macOS and re-import this file
