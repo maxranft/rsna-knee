@@ -1,18 +1,22 @@
 "use strict";
-// Review tool front end. Talks to scripts/review.py on localhost; nothing leaves this machine.
+// Knee MRI Review front end (PACS-style). Talks to scripts/review.py on localhost; nothing leaves this machine.
 
-const $ = (s) => document.querySelector(s);
+const $ = (s, r = document) => r.querySelector(s);
 const S = {
-  items: [], i: 0, item: null, slot: null, idx: 0, original: false, imgToken: 0, goToken: 0,
-  heat: true, counter: false, alpha: 0.65, regions: {}, fine: {},
-  bright: 1, contrast: 1, zoom: 1, pan: { x: 0, y: 0 },
+  items: [], i: 0, item: null, original: false, goToken: 0,
+  layout: 1, active: 0, vps: [], tool: "wl",
+  heat: true, counter: false, alpha: 0.65,
+  wl: { w: 255, l: 127.5, invert: false },
+  regions: {}, fine: {},
 };
-const SHORT = { sag_fs: "Sagittal", cor_fs: "Coronal", ax_fs: "Axial", t1: "T1" };
-const SUB = { sag_fs: "fluid-sensitive", cor_fs: "fluid-sensitive", ax_fs: "fluid-sensitive", t1: "not fluid-sensitive" };
+const CODE = { sag_fs: "SAG FS", cor_fs: "COR FS", ax_fs: "AX FS", t1: "T1" };
+const NAME = { sag_fs: "Sagittal fat-sat", cor_fs: "Coronal fat-sat", ax_fs: "Axial fat-sat", t1: "T1 (no fat-sat)" };
 const RED = [230, 103, 103], BLUE = [57, 135, 229];
 const pct = (p) => `${Math.round(p * 100)}%`;
 const stateOf = (p) => (p >= 0.5 ? "present" : "absent");
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+const dpr = () => window.devicePixelRatio || 1;
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
@@ -33,8 +37,8 @@ function applySession(s) {
 
 function renderTally(t) {
   $("#tally").innerHTML = t.graded
-    ? `<strong>${t.graded}</strong> graded, <strong>${t.label_wrong}</strong> training labels wrong, <strong>${t.model_wrong}</strong> model mistakes`
-    : "Nothing graded in this queue yet";
+    ? `<strong>${t.graded}</strong> graded · <strong>${t.label_wrong}</strong> labels wrong · <strong>${t.model_wrong}</strong> model errors`
+    : "Nothing graded in this worklist yet";
 }
 
 async function go(i) {
@@ -49,9 +53,6 @@ async function go(i) {
   S.item = data;
   S.regions = {};
   S.fine = {};
-  S.slot = data.start.slot;
-  S.idx = data.start.idx;
-  resetView(false);
   renderItem();
 }
 
@@ -60,10 +61,27 @@ function nextOpen(after) {
   return k === -1 ? S.items.length : k;
 }
 
+// ---------------------------------------------------------------- truth and verdict
+function truth(it) {
+  if (it.gold !== null) return { state: it.gold ? "present" : "absent", p: null, src: "Radiologist gold label", verified: true };
+  return { state: stateOf(it.report_label), p: it.report_label, src: "Report label, not radiologist-checked", verified: false };
+}
+
+function renderVerdict() {
+  const it = S.item, t = truth(it), m = stateOf(it.model), agree = t.state === m;
+  $("#verdict").innerHTML =
+    `<span class="what">${esc(cap(it.noun))}</span>` +
+    `<span class="slot"><span class="k">Actual</span><span class="chip ${t.state}">${t.state.toUpperCase()}</span><span class="src">${t.src}</span></span>` +
+    `<span class="arrow" aria-hidden="true">→</span>` +
+    `<span class="slot"><span class="k">Model prediction</span><span class="chip ${m}">${m.toUpperCase()} <span class="p">${pct(it.model)}</span></span></span>` +
+    `<span class="match ${agree ? "" : "no"}">${agree ? "Model matches" : "Model disagrees"}</span>`;
+}
+
 // ---------------------------------------------------------------- item panel
-function card(name, p) {
+function meterRow(name, p) {
   const st = stateOf(p);
-  return `<div class="card ${st}"><div class="k">${name}</div><div class="v">${pct(p)}</div><div class="s">${st}</div></div>`;
+  return `<tr><td class="n">${name}</td><td class="b"><div class="meter"><i style="width:${(p * 100).toFixed(1)}%;background:var(--${st})"></i></div></td>` +
+    `<td class="v">${pct(p)}</td><td class="s"><span class="state ${st}">${cap(st)}</span></td></tr>`;
 }
 
 function renderItem() {
@@ -73,23 +91,32 @@ function renderItem() {
   $("#finding").textContent = it.label;
   $("#question").textContent = it.question;
   const gold = it.gold === null
-    ? `<div class="card none"><div class="k">Gold label</div><div class="v">Not in gold set</div></div>`
-    : `<div class="card ${it.gold ? "present" : "absent"}"><div class="k">Gold label</div><div class="v">${it.gold ? "Yes" : "No"}</div><div class="s">${it.gold ? "present" : "absent"}</div></div>`;
-  $("#cards").innerHTML = card("Model", it.model) + card("Training label", it.report_label) + gold;
+    ? `<tr><td class="n">Gold label</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state none">Not in set</span></td></tr>`
+    : `<tr><td class="n">Gold label</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state ${it.gold ? "present" : "absent"}">${it.gold ? "Present" : "Absent"}</span></td></tr>`;
+  $("#assess").innerHTML = meterRow("Model", it.model) + meterRow("Training label", it.report_label) + gold;
   const agree = stateOf(it.model) === stateOf(it.report_label);
-  $("#agree").innerHTML = `The model and the training label <strong>${agree ? "agree" : "disagree"}</strong>.`;
+  $("#agree").innerHTML = `Model and training label <strong>${agree ? "agree" : "disagree"}</strong>.`;
   $("#summary").textContent = it.summary;
-
+  $("#study-head").innerHTML = `<strong>Study</strong>…${esc(it.study_short)}<br>${it.series.length} series`;
+  renderVerdict();
   renderReport();
   for (const kind of ["accept", "deny"]) {
     const c = it.choices[kind], b = $(`#${kind}`);
-    b.querySelector(".t").textContent = c.title;
-    b.querySelector(".d").textContent = c.detail;
     b.classList.toggle("says-present", c.truth === 1);
     b.classList.toggle("says-absent", c.truth === 0);
     b.classList.toggle("picked", it.decision === kind);
+    b.title = `${c.title}. ${c.detail}`;
   }
-  updateView();
+  showConsequence(null);
+  buildViewports();
+  renderThumbs();
+}
+
+function showConsequence(kind) {
+  const ch = S.item.choices, el = $("#consequence");
+  if (kind && ch[kind]) { el.innerHTML = `<b>${esc(ch[kind].title)}</b>. ${esc(ch[kind].detail)}`; return; }
+  const a = ch.accept.title.replace(/^Accept:\s*/, ""), d = ch.deny.title.replace(/^Deny:\s*/, "");
+  el.innerHTML = `<b>Accept</b> records ${esc(a)}. <b>Deny</b> records ${esc(d)}.`;
 }
 
 function renderReport() {
@@ -98,9 +125,9 @@ function renderReport() {
   const hits = $("#hits");
   hits.classList.toggle("none", n === 0);
   hits.textContent = n
-    ? `${n} sentence${n > 1 ? "s are" : " is"} about this finding (highlighted).`
-    : "No sentence mentions this finding. Read the full report before deciding.";
-  if (!r.translated) hits.textContent += " The English translation isn't downloaded yet, so this is the original.";
+    ? `${n} sentence${n > 1 ? "s" : ""} about this finding (highlighted).`
+    : "No sentence mentions this finding. Read the full report.";
+  if (!r.translated) hits.textContent += " Translation not downloaded yet; showing the original.";
   const toggle = $("#lang-toggle");
   toggle.hidden = !r.translated || r.english_original;
   toggle.querySelector("span").textContent = S.original ? "Show English" : "Show original";
@@ -113,130 +140,338 @@ function renderReport() {
     .join("");
 }
 
-// ---------------------------------------------------------------- viewer
-const series = () => S.item.series.find((s) => s.slot === S.slot);
-const sliceWeight = () => Math.min(1, Math.abs(series().contrib[S.idx]) / S.item.scale);
+// ---------------------------------------------------------------- series browser
+const seriesOf = (slot) => S.item.series.find((s) => s.slot === slot);
+const strongestIdx = (slot) => {
+  const s = seriesOf(slot);
+  return s.contrib.reduce((best, c, k) => (Math.abs(c) > Math.abs(s.contrib[best]) ? k : best), 0);
+};
+
+function renderThumbs() {
+  const it = S.item;
+  $("#thumbs").innerHTML = it.series.map((s, k) => {
+    const peak = s.contrib.reduce((a, c) => (Math.abs(c) > Math.abs(a) ? c : a), 0);
+    const w = Math.min(100, (100 * Math.abs(peak)) / it.scale);
+    return `<button type="button" class="thumb" data-slot="${s.slot}" title="${NAME[s.slot]}: ${s.n} images. Bar: strongest evidence in this series">` +
+      `<div class="im"><img alt="" data-src="/api/image/${it.i}/${s.slot}/${strongestIdx(s.slot)}.png"><span class="se">Se ${k + 1}</span><span class="n">${s.n} im</span></div>` +
+      `<span class="cap"><b>${CODE[s.slot]}</b>${NAME[s.slot]}</span>` +
+      `<span class="ev"><i style="width:${w.toFixed(0)}%;background:var(--${peak >= 0 ? "present" : "absent"})"></i></span></button>`;
+  }).join("");
+  for (const img of document.querySelectorAll("#thumbs img")) loadThumb(img, 0);
+  markActiveThumb();
+}
+
+function loadThumb(img, tries) {
+  const item = S.i;
+  img.onerror = () => { if (tries < 40 && item === S.i) setTimeout(() => loadThumb(img, tries + 1), 3000); };
+  img.src = `${img.dataset.src}?t=${tries}`;
+}
+
+function markActiveThumb() {
+  const vp = S.vps[S.active];
+  for (const b of document.querySelectorAll("#thumbs .thumb")) b.classList.toggle("active", !!vp && b.dataset.slot === vp.slot);
+}
+
+// ---------------------------------------------------------------- viewports
+function buildViewports() {
+  const it = S.item, grid = $("#grid");
+  const prevSlot = S.vps[S.active] ? S.vps[S.active].slot : it.start.slot;
+  grid.className = `grid ${S.layout === 1 ? "g1" : "g4"}`;
+  grid.innerHTML = "";
+  let plan;
+  if (S.layout === 1) {
+    const slot = it.series.some((s) => s.slot === prevSlot) && S.vps.length ? prevSlot : it.start.slot;
+    plan = [{ slot, idx: slot === it.start.slot ? it.start.idx : strongestIdx(slot) }];
+  } else {
+    plan = it.series.slice(0, 4).map((s) => ({ slot: s.slot, idx: s.slot === it.start.slot ? it.start.idx : strongestIdx(s.slot) }));
+  }
+  S.vps = plan.map((p, k) => makeViewport(k, p.slot, p.idx));
+  S.active = Math.max(0, S.vps.findIndex((v) => v.slot === prevSlot));
+  layoutSquares();
+  S.vps.forEach(renderVp);
+  setActive(S.active);
+}
+
+function makeViewport(k, slot, idx) {
+  const el = document.createElement("div");
+  el.className = `vp tool-${S.tool}`;
+  el.innerHTML = `<div class="sq"><div class="zoomer"><img alt="" draggable="false"><canvas></canvas></div></div>` +
+    `<div class="ov ov-tl"></div><div class="ov ov-tr"></div><div class="ov ov-bl"></div><div class="ov ov-br"></div>` +
+    `<svg class="bar" aria-hidden="true"></svg><div class="pending" hidden></div>`;
+  $("#grid").appendChild(el);
+  const vp = {
+    k, el, slot, idx, zoom: 1, pan: { x: 0, y: 0 }, imgToken: 0, outline: false,
+    sq: $(".sq", el), zoomer: $(".zoomer", el), img: $("img", el), canvas: $("canvas", el), bar: $(".bar", el), pending: $(".pending", el),
+    ov: { tl: $(".ov-tl", el), tr: $(".ov-tr", el), bl: $(".ov-bl", el), br: $(".ov-br", el) },
+  };
+  bindViewport(vp);
+  return vp;
+}
+
+function layoutSquares() {
+  for (const vp of S.vps) {
+    const side = Math.max(50, Math.min(vp.el.clientWidth - 26, vp.el.clientHeight - 4));
+    vp.sq.style.width = vp.sq.style.height = `${side}px`;
+    applyTransform(vp);
+  }
+}
+
+function renderVp(vp) {
+  renderCorners(vp);
+  drawBar(vp);
+  loadImage(vp);
+}
 
 function strength(c) {
   const m = Math.abs(c) / S.item.scale;
-  return m > 0.66 ? "strong" : m > 0.33 ? "moderate" : m > 0.1 ? "weak" : "almost no";
+  return m > 0.66 ? "strong" : m > 0.33 ? "moderate" : m > 0.1 ? "weak" : "no";
 }
 
-function updateView() {
-  const s = series();
-  $("#series").innerHTML = S.item.series
-    .map((x, k) => `<button type="button" role="tab" aria-selected="${x.slot === S.slot}" data-slot="${x.slot}" title="Key ${k + 1}">` +
-      `${SHORT[x.slot]}<small>${SUB[x.slot]}</small><span class="n">${x.n}</span></button>`)
-    .join("");
-  const range = $("#slice-range");
-  range.max = s.n;
-  range.value = S.idx + 1;
-  $("#slice-out").textContent = `${S.idx + 1} / ${s.n}`;
-  const c = s.contrib[S.idx];
-  const best = S.slot === S.item.start.slot && S.idx === S.item.start.idx;
-  const push = strength(c) === "almost no" ? "almost no evidence" : `${strength(c)} push toward ${c > 0 ? "present" : "absent"}`;
-  $("#hud-slice").textContent = `${SHORT[S.slot]} ${S.idx + 1}/${s.n} · ${push}${best ? " · strongest slice" : ""}`;
-  $("#heat-toggle").setAttribute("aria-pressed", String(S.heat));
-  $("#counter-toggle").setAttribute("aria-pressed", String(S.counter));
-  drawStrip();
-  loadImage();
+function renderCorners(vp) {
+  const s = seriesOf(vp.slot), it = S.item;
+  const se = it.series.findIndex((x) => x.slot === vp.slot) + 1;
+  const c = s.contrib[vp.idx], st = strength(c);
+  const best = vp.slot === it.start.slot && vp.idx === it.start.idx;
+  vp.ov.tl.innerHTML = `${CODE[vp.slot]}<br>Se ${se}/${it.series.length}${S.layout === 1 ? `<br>${NAME[vp.slot]}` : ""}`;
+  vp.ov.tr.innerHTML = `Im ${vp.idx + 1}/${s.n}` +
+    (st === "no" ? "<br>no evidence" : `<br><span class="${c > 0 ? "pr" : "ab"}">${st} ${c > 0 ? "▲ present" : "▼ absent"}</span>`) +
+    (best ? `<br><span class="hl">◆ strongest image</span>` : "");
+  renderWL(vp);
 }
 
-async function loadImage() {
-  const token = ++S.imgToken;
-  const r = await fetch(`/api/image/${S.i}/${S.slot}/${S.idx}.png`);
-  if (token !== S.imgToken) return;
-  const pending = $("#pending");
+function renderWL(vp) {
+  vp.ov.bl.innerHTML = `W ${Math.round(S.wl.w)}  L ${Math.round(S.wl.l)}${S.wl.invert ? "  INV" : ""}<br>Zoom ${vp.zoom.toFixed(2)}×`;
+}
+
+function drawBar(vp) {
+  const s = seriesOf(vp.slot), svg = vp.bar;
+  const H = Math.max(40, vp.el.clientHeight - 16), n = s.n, h = H / n;
+  const out = [`<rect class="track" x="0" y="0" width="14" height="${H}" rx="2"/>`];
+  s.contrib.forEach((c, k) => {
+    const a = Math.min(1, Math.abs(c) / S.item.scale);
+    if (a < 0.06) return;
+    out.push(`<rect x="2" y="${(k * h).toFixed(2)}" width="10" height="${Math.max(1, h - 0.6).toFixed(2)}" fill="rgb(${(c > 0 ? RED : BLUE).join(",")})" fill-opacity="${(0.25 + 0.75 * a).toFixed(2)}"/>`);
+  });
+  out.push(`<rect class="cur" x="0" y="${(vp.idx * h + h / 2 - 1).toFixed(2)}" width="14" height="2"/>`);
+  svg.setAttribute("viewBox", `0 0 14 ${H}`);
+  svg.style.height = `${H}px`;
+  svg.innerHTML = out.join("");
+}
+
+async function loadImage(vp) {
+  const token = ++vp.imgToken;
+  const r = await fetch(`/api/image/${S.i}/${vp.slot}/${vp.idx}.png`);
+  if (token !== vp.imgToken) return;
   if (r.status === 202) {
     const d = await r.json();
-    pending.hidden = false;
-    pending.textContent = `Downloading this queue's images from Kaggle. ${d.ready} of ${d.studies} studies are ready; the first batch takes about a minute.`;
-    $("#slice").removeAttribute("src");
-    clearHeat();
-    setTimeout(() => token === S.imgToken && loadImage(), 2500);
+    vp.pending.hidden = false;
+    vp.pending.textContent = `Retrieving images from Kaggle (${d.ready} of ${d.studies} studies ready).`;
+    vp.img.removeAttribute("src");
+    clearCanvas(vp);
+    setTimeout(() => token === vp.imgToken && loadImage(vp), 2500);
     return;
   }
   if (!r.ok) {
-    pending.hidden = false;
-    pending.textContent = "This slice couldn't be loaded. Check the terminal running review.py.";
+    vp.pending.hidden = false;
+    vp.pending.textContent = "This image couldn't be loaded. Check the terminal running review.py.";
     return;
   }
   const blob = await r.blob();
-  if (token !== S.imgToken) return;
-  const img = $("#slice");
-  const old = img.src;
-  img.src = URL.createObjectURL(blob);
+  if (token !== vp.imgToken) return;
+  const old = vp.img.src;
+  vp.img.src = URL.createObjectURL(blob);
   if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-  pending.hidden = true;
-  drawHeat();
+  vp.pending.hidden = true;
+  drawHeat(vp);
+}
+
+function setSlice(vp, slot, idx) {
+  const s = seriesOf(slot);
+  if (idx === undefined) idx = strongestIdx(slot); // entering a series: open its strongest-evidence image
+  vp.slot = slot;
+  vp.idx = Math.max(0, Math.min(s.n - 1, idx));
+  renderVp(vp);
+  if (vp.k === S.active) { markActiveThumb(); renderStatus(); }
+}
+
+function setActive(k) {
+  S.active = k;
+  S.vps.forEach((v) => v.el.classList.toggle("active", v.k === k && S.vps.length > 1));
+  markActiveThumb();
+  const vp = S.vps[k];
+  if (vp) updateLocate(vp);
+  renderStatus();
+}
+
+function stepSeries(d) {
+  const vp = S.vps[S.active], slots = S.item.series.map((s) => s.slot);
+  setSlice(vp, slots[(slots.indexOf(vp.slot) + d + slots.length) % slots.length]);
+}
+
+function strongest() {
+  const it = S.item;
+  let vp = S.vps.find((v) => v.slot === it.start.slot);
+  if (!vp) vp = S.vps[S.active];
+  setActive(vp.k);
+  setSlice(vp, it.start.slot, it.start.idx);
+}
+
+function setLayout(n) {
+  S.layout = n;
+  document.querySelectorAll("[data-layout]").forEach((b) => b.classList.toggle("on", Number(b.dataset.layout) === n));
+  if (S.item) buildViewports();
+}
+
+function setTool(t) {
+  S.tool = t;
+  document.querySelectorAll("[data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t));
+  S.vps.forEach((v) => { v.el.className = `vp tool-${t}${v.k === S.active && S.vps.length > 1 ? " active" : ""}`; });
+  renderStatus();
+}
+
+// ---------------------------------------------------------------- window/level, zoom, pan
+function applyWL() {
+  const { w, l, invert } = S.wl;
+  let slope = 255 / w, icpt = -(l - w / 2) / w;
+  if (invert) { slope = -slope; icpt = 1 - icpt; }
+  for (const f of document.querySelectorAll("#wl feFuncR, #wl feFuncG, #wl feFuncB")) {
+    f.setAttribute("slope", slope.toFixed(5));
+    f.setAttribute("intercept", icpt.toFixed(5));
+  }
+  $("#invert").setAttribute("aria-pressed", String(invert));
+  S.vps.forEach(renderWL);
+  renderStatus();
+}
+
+function applyTransform(vp) {
+  const side = vp.sq.clientWidth;
+  const maxPan = ((vp.zoom - 1) * side) / 2;
+  vp.pan.x = Math.max(-maxPan, Math.min(maxPan, vp.pan.x));
+  vp.pan.y = Math.max(-maxPan, Math.min(maxPan, vp.pan.y));
+  vp.zoomer.style.transform = `translate(${vp.pan.x}px, ${vp.pan.y}px) scale(${vp.zoom})`;
+  renderWL(vp);
+}
+
+function zoomAt(vp, f, cx = 0, cy = 0) {
+  const z = Math.max(1, Math.min(8, vp.zoom * f));
+  vp.pan.x = cx - ((cx - vp.pan.x) * z) / vp.zoom;
+  vp.pan.y = cy - ((cy - vp.pan.y) * z) / vp.zoom;
+  vp.zoom = z;
+  if (z === 1) vp.pan = { x: 0, y: 0 };
+  applyTransform(vp);
+}
+
+function resetAll() {
+  S.wl = { w: 255, l: 127.5, invert: false };
+  applyWL();
+  for (const vp of S.vps) { vp.zoom = 1; vp.pan = { x: 0, y: 0 }; applyTransform(vp); }
+}
+
+function bindViewport(vp) {
+  let drag = null, wheel = 0;
+  vp.el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".bar")) return;
+    setActive(vp.k);
+    drag = { x: e.clientX, y: e.clientY, w: S.wl.w, l: S.wl.l, zoom: vp.zoom, px: vp.pan.x, py: vp.pan.y };
+    vp.el.setPointerCapture(e.pointerId);
+  });
+  vp.el.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (S.tool === "wl") {
+      S.wl.w = Math.max(2, Math.min(510, drag.w + dx));
+      S.wl.l = Math.max(-64, Math.min(320, drag.l - dy));
+      applyWL();
+    } else if (S.tool === "pan") {
+      vp.pan.x = drag.px + dx;
+      vp.pan.y = drag.py + dy;
+      applyTransform(vp);
+    } else {
+      vp.zoom = Math.max(1, Math.min(8, drag.zoom * Math.exp(-dy * 0.01)));
+      if (vp.zoom === 1) vp.pan = { x: 0, y: 0 };
+      applyTransform(vp);
+    }
+  });
+  const end = () => { drag = null; };
+  vp.el.addEventListener("pointerup", end);
+  vp.el.addEventListener("pointercancel", end);
+  vp.el.addEventListener("dblclick", () => { vp.zoom = 1; vp.pan = { x: 0, y: 0 }; applyTransform(vp); });
+  vp.el.addEventListener("wheel", (e) => {
+    if (!S.item) return;
+    e.preventDefault();
+    setActive(vp.k);
+    if (e.ctrlKey) {
+      const b = vp.sq.getBoundingClientRect();
+      zoomAt(vp, Math.exp(-e.deltaY * 0.01), e.clientX - b.left - b.width / 2, e.clientY - b.top - b.height / 2);
+      return;
+    }
+    wheel += e.deltaY;
+    if (Math.abs(wheel) >= 40) {
+      setSlice(vp, vp.slot, vp.idx + Math.sign(wheel));
+      wheel = 0;
+    }
+  }, { passive: false });
+  vp.bar.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    setActive(vp.k);
+    const b = vp.bar.getBoundingClientRect(), n = seriesOf(vp.slot).n;
+    setSlice(vp, vp.slot, Math.floor(((e.clientY - b.top) / b.height) * n));
+  });
 }
 
 // ---------------------------------------------------------------- highlight
-function sizeCanvas() {
-  const c = $("#heat"), box = $("#lightbox");
-  const dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(box.clientWidth * dpr);
-  c.height = Math.round(box.clientHeight * dpr);
-  return c;
+function sizeCanvas(vp) {
+  const side = vp.sq.clientWidth;
+  vp.canvas.width = Math.round(side * dpr());
+  vp.canvas.height = Math.round(side * dpr());
+  return vp.canvas;
 }
 
-function clearHeat() {
-  const c = sizeCanvas();
+function clearCanvas(vp) {
+  const c = sizeCanvas(vp);
   c.getContext("2d").clearRect(0, 0, c.width, c.height);
+  vp.outline = false;
+  vp.where = null;
+  vp.ov.br.innerHTML = "";
 }
 
-function setLegend(kind) {
-  const noun = esc(S.item.noun);
-  const parts = [];
-  if (kind) {
-    parts.push(`<span class="sw present"></span>evidence for ${noun}`);
-    if (kind === "outline") parts.push(`<span class="sw ring"></span>strongest area`);
-    if (S.counter) parts.push(`<span class="sw absent"></span>evidence against`);
-  }
-  $("#hud-legend").innerHTML = parts.join(" &nbsp; ");
+function sliceWeight(vp) {
+  return Math.min(1, Math.abs(seriesOf(vp.slot).contrib[vp.idx]) / S.item.scale);
 }
 
-async function drawHeat() {
-  clearHeat();
-  setLegend(null);
-  $("#hud-status").textContent = "";
-  const locate = $("#locate");
-  if (!S.item || !$("#slice").src) return;
-  if (!S.heat) { locate.textContent = "Highlight is off (press H)."; return; }
-  if (S.item.negligible) {
-    locate.textContent = "The model's call barely depends on any slice, so there is no area to highlight.";
-    return;
-  }
-  const weight = sliceWeight();
-  if (weight < 0.1) {
-    locate.innerHTML = "This slice barely affects the model's call. Press <kbd>G</kbd> for the strongest slice.";
-    return;
-  }
-  const key = `${S.i}/${S.slot}/${S.idx}`;
-  if (S.fine[key]) return renderGrid(S.fine[key].grid, S.fine[key].n, weight, true);
-
-  // quick coarse map (4x4) while the fine map (8x8, re-encoded) is computed
+async function drawHeat(vp) {
+  clearCanvas(vp);
+  vp.note = "";
+  if (!S.item || !vp.img.src) return;
+  if (!S.heat) { vp.note = "Highlight is off (H)."; return updateLocate(vp); }
+  if (S.item.negligible) { vp.note = "The model's call barely depends on any image, so there is no area to highlight."; return updateLocate(vp); }
+  const weight = sliceWeight(vp);
+  if (weight < 0.1) { vp.note = "This image barely affects the model's call. Press G for the strongest image."; return updateLocate(vp); }
+  const key = `${S.i}/${vp.slot}/${vp.idx}`;
+  if (S.fine[key]) return renderGrid(vp, S.fine[key].grid, S.fine[key].n, weight, true);
   if (!S.regions[key]) S.regions[key] = (await api(`/api/region/${key}`)).data.grid;
-  if (key !== `${S.i}/${S.slot}/${S.idx}`) return; // moved on while loading
-  renderGrid(S.regions[key], 4, weight, false);
-  $("#hud-status").textContent = "Refining highlight…";
-  fetchFine(key, weight);
+  if (key !== `${S.i}/${vp.slot}/${vp.idx}`) return; // moved on while loading
+  renderGrid(vp, S.regions[key], 4, weight, false);
+  fetchFine(vp, key, weight);
 }
 
-async function fetchFine(key, weight) {
+async function fetchFine(vp, key, weight) {
+  vp.refining = true;
+  renderStatus();
   for (let tries = 0; tries < 60; tries++) {
     const { status, data } = await api(`/api/fine/${key}`);
     if (status === 200) {
       S.fine[key] = data;
-      if (key === `${S.i}/${S.slot}/${S.idx}` && S.heat) {
-        $("#hud-status").textContent = "";
-        renderGrid(data.grid, data.n, weight, true);
-      }
+      vp.refining = false;
+      if (key === `${S.i}/${vp.slot}/${vp.idx}` && S.heat) renderGrid(vp, data.grid, data.n, weight, true);
+      renderStatus();
       return;
     }
-    if (key !== `${S.i}/${S.slot}/${S.idx}`) return;
+    if (key !== `${S.i}/${vp.slot}/${vp.idx}`) break;
     await new Promise((r) => setTimeout(r, 2000)); // images still downloading
   }
+  vp.refining = false;
+  renderStatus();
 }
 
 // bilinear upsampling of an n*n cell-centred grid to m*m, with a border of zeros so contours close
@@ -248,9 +483,8 @@ function upsample(cells, n, m) {
       const v = Math.min(n - 1, Math.max(0, ((y + 0.5) / m) * n - 0.5));
       const x0 = Math.floor(u), y0 = Math.floor(v), x1 = Math.min(n - 1, x0 + 1), y1 = Math.min(n - 1, y0 + 1);
       const fx = u - x0, fy = v - y0;
-      const val = cells[y0 * n + x0] * (1 - fx) * (1 - fy) + cells[y0 * n + x1] * fx * (1 - fy)
+      out[(y + 1) * (m + 2) + (x + 1)] = cells[y0 * n + x0] * (1 - fx) * (1 - fy) + cells[y0 * n + x1] * fx * (1 - fy)
         + cells[y1 * n + x0] * (1 - fx) * fy + cells[y1 * n + x1] * fx * fy;
-      out[(y + 1) * (m + 2) + (x + 1)] = val;
     }
   }
   return out;
@@ -281,37 +515,38 @@ function place(cx, cy) {
   return v === "middle" && h === "centre" ? "centre" : v === "middle" ? `middle ${h}` : h === "centre" ? `${v} centre` : `${v} ${h}`;
 }
 
-function renderGrid(cells, n, weight, fine) {
-  const c = sizeCanvas(), g = c.getContext("2d"), W = c.width, H = c.height;
+function renderGrid(vp, cells, n, weight, fine) {
+  const c = sizeCanvas(vp), g = c.getContext("2d"), W = c.width, H = c.height, k = dpr();
   g.clearRect(0, 0, W, H);
+  vp.outline = false;
+  vp.where = null;
+  vp.note = "";
   const peak = Math.max(...cells.map(Math.abs)) || 1;
-  const posPeak = Math.max(0, ...cells);
-  const negPeak = Math.max(0, ...cells.map((v) => -v));
+  const posPeak = Math.max(0, ...cells), negPeak = Math.max(0, ...cells.map((v) => -v));
 
-  // 1. soft heat layer: red toward present, blue (optional) toward absent
+  // soft heat layer: red toward present, blue (optional) toward absent
   const off = document.createElement("canvas");
   off.width = off.height = n;
   const px = off.getContext("2d").createImageData(n, n);
-  cells.forEach((v, k) => {
-    const a = Math.abs(v) / peak;
+  cells.forEach((v, j) => {
     if (v < 0 && !S.counter) return;
+    const a = Math.abs(v) / peak;
     const [r, gg, b] = v > 0 ? RED : BLUE;
-    px.data.set([r, gg, b, Math.round(255 * S.alpha * Math.max(0.35, weight) * (a < 0.2 ? 0 : Math.pow(a, 1.2)))], k * 4);
+    px.data.set([r, gg, b, Math.round(255 * S.alpha * 0.8 * Math.max(0.35, weight) * (a < 0.2 ? 0 : Math.pow(a, 1.2)))], j * 4);
   });
   off.getContext("2d").putImageData(px, 0, 0);
   g.imageSmoothingEnabled = true;
   g.imageSmoothingQuality = "high";
   g.drawImage(off, 0, 0, n, n, 0, 0, W, H);
 
-  // 2. outline around the strongest area (fine map only: the coarse 4x4 cells are too blunt to outline)
-  const M = 64, w = M + 2, dpr = window.devicePixelRatio || 1;
+  const M = 64, w = M + 2;
   const toPx = (x, y) => [((x - 0.5) / M) * W, ((y - 0.5) / M) * H];
-  const drawOutline = (field, thr, rgb, dashed) => {
+  const outline = (field, thr, rgb, dashed) => {
     const segs = contour(field, w, thr);
     if (!segs.length) return null;
-    for (const [lw, col] of [[5 * dpr, "rgba(0,0,0,0.75)"], [2.4 * dpr, `rgb(${rgb.join(",")})`]]) {
+    for (const [lw, col] of [[4.5 * k, "rgba(0,0,0,0.8)"], [2 * k, `rgb(${rgb.join(",")})`]]) {
       g.beginPath();
-      g.setLineDash(dashed ? [6 * dpr, 5 * dpr] : []);
+      g.setLineDash(dashed ? [5 * k, 4 * k] : []);
       for (const [x1, y1, x2, y2] of segs) {
         const [ax, ay] = toPx(x1, y1), [bx, by] = toPx(x2, y2);
         g.moveTo(ax, ay);
@@ -326,20 +561,16 @@ function renderGrid(cells, n, weight, fine) {
     return segs;
   };
 
-  const locate = $("#locate");
-  const noun = esc(S.item.noun);
-  if (!fine || posPeak < 0.2 * peak || posPeak < 0.01) {
-    setLegend("heat");
-    if (!fine) locate.textContent = "Showing the quick map; the sharper highlight follows in a moment.";
-    else locate.innerHTML = `On this slice the image mostly argues <strong>against</strong> ${noun}${S.counter ? " (blue)" : " (press C to see where)"}.`;
-    return;
+  if (!fine) { vp.note = "Quick map shown; the precise outline follows in a moment."; return updateLocate(vp); }
+  if (posPeak < 0.2 * peak || posPeak < 0.01) {
+    if (S.counter && negPeak >= 0.2 * peak) outline(upsample(cells.map((v) => Math.max(0, -v)), n, M), 0.5 * negPeak, BLUE, true);
+    vp.note = `On this image the model's evidence points mostly <b class="ab-t">against</b> ${esc(S.item.noun)}${S.counter ? " (dashed blue)" : " (press C to show it)"}.`;
+    vp.ov.br.innerHTML = S.counter ? `<span class="ab">┅ against</span>` : "";
+    return updateLocate(vp);
   }
-  const pos = upsample(cells.map((v) => Math.max(0, v)), n, M);
-  const thr = 0.5 * posPeak;
-  const segs = drawOutline(pos, thr, RED, false);
-  if (S.counter && negPeak >= 0.2 * peak) drawOutline(upsample(cells.map((v) => Math.max(0, -v)), n, M), 0.5 * negPeak, BLUE, true);
-
-  // where the outlined area sits, and a tag above it
+  const pos = upsample(cells.map((v) => Math.max(0, v)), n, M), thr = 0.5 * posPeak;
+  const segs = outline(pos, thr, RED, false);
+  if (S.counter && negPeak >= 0.2 * peak) outline(upsample(cells.map((v) => Math.max(0, -v)), n, M), 0.5 * negPeak, BLUE, true);
   let sx = 0, sy = 0, sw = 0, minx = Infinity, miny = Infinity;
   for (let y = 1; y <= M; y++) {
     for (let x = 1; x <= M; x++) {
@@ -348,103 +579,52 @@ function renderGrid(cells, n, weight, fine) {
     }
   }
   if (segs && sw > 0) {
-    const where = place((sx / sw - 0.5) / M, (sy / sw - 0.5) / M);
-    locate.innerHTML = `Red outline: where the model's evidence for <strong>${noun}</strong> sits on this slice (${where} of the image). It explains the model, it is not a diagnosis.`;
+    vp.outline = true;
+    vp.where = place((sx / sw - 0.5) / M, (sy / sw - 0.5) / M);
     const [tx, ty] = toPx(minx, miny);
-    const label = `evidence for ${S.item.noun}`;
-    g.font = `700 ${12 * dpr}px "Atkinson Hyperlegible", system-ui, sans-serif`;
-    const tw = g.measureText(label).width + 10 * dpr, th = 18 * dpr;
-    const bx = Math.min(W - tw - 4, Math.max(4, tx)), by = Math.max(4, ty - th - 6 * dpr);
-    g.fillStyle = "rgba(0,0,0,0.72)";
+    const label = `${S.item.noun}`;
+    g.font = `600 ${11 * k}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    const tw = g.measureText(label).width + 10 * k, th = 17 * k;
+    const bx = Math.min(W - tw - 4, Math.max(4, tx)), by = Math.max(4, ty - th - 5 * k);
+    g.fillStyle = "rgba(0,0,0,0.75)";
     g.fillRect(bx, by, tw, th);
     g.fillStyle = `rgb(${RED.join(",")})`;
-    g.fillText(label, bx + 5 * dpr, by + 13 * dpr);
+    g.fillRect(bx, by, 2 * k, th);
+    g.fillStyle = "#f2f2f2";
+    g.fillText(label, bx + 6 * k, by + 12.5 * k);
+    vp.ov.br.innerHTML = `<span class="pr">━ model evidence</span>${S.counter ? `<br><span class="ab">┅ against</span>` : ""}`;
   }
-  setLegend("outline");
+  updateLocate(vp);
 }
 
-// ---------------------------------------------------------------- strip
-function drawStrip() {
-  const svg = $("#strip");
-  const W = svg.clientWidth, H = 60, top = 14, mid = top + (H - top) / 2, half = (H - top) / 2 - 3;
-  const all = S.item.series, gap = 14;
-  const total = all.reduce((a, s) => a + s.n, 0);
-  const bw = (W - gap * (all.length - 1)) / total;
-  const w = Math.max(1, bw - (bw > 4 ? 1.5 : 0.5));
-  const out = [`<line class="zero" x1="0" x2="${W}" y1="${mid}" y2="${mid}"/>`];
-  let x = 0;
-  all.forEach((s, si) => {
-    if (si) out.push(`<line class="sep" x1="${x - gap / 2}" x2="${x - gap / 2}" y1="${top}" y2="${H}"/>`);
-    out.push(`<text class="series-label" x="${x}" y="11">${SHORT[s.slot]}</text>`);
-    s.contrib.forEach((c, k) => {
-      const h = Math.max(1, (Math.abs(c) / S.item.scale) * half);
-      const bx = x + k * bw;
-      out.push(`<rect x="${bx.toFixed(2)}" y="${(c > 0 ? mid - h : mid).toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" rx="${Math.min(2, w / 2).toFixed(2)}" fill="var(--${c > 0 ? "present" : "absent"})"/>`);
-      out.push(`<rect class="bar-hit" data-slot="${s.slot}" data-k="${k}" x="${bx.toFixed(2)}" y="${top}" width="${bw.toFixed(2)}" height="${H - top}"/>`);
-    });
-    if (s.slot === S.slot) out.push(`<rect class="cursor" x="${(x + S.idx * bw - 1.5).toFixed(2)}" y="${top}" width="${(bw + 1.5).toFixed(2)}" height="${H - top}" rx="2"/>`);
-    x += s.n * bw + gap;
-  });
-  svg.innerHTML = out.join("");
-}
-
-function setSlice(slot, idx) {
-  const s = S.item.series.find((x) => x.slot === slot);
-  if (idx === undefined) { // entering a series: open its strongest-evidence slice
-    idx = s.contrib.reduce((best, c, k) => (Math.abs(c) > Math.abs(s.contrib[best]) ? k : best), 0);
+function updateLocate(vp) {
+  if (vp.k !== S.active) return;
+  const el = $("#locate");
+  if (vp.outline && vp.where) {
+    el.innerHTML = `Outlined on ${CODE[vp.slot]} image ${vp.idx + 1}: the model's evidence for ${esc(S.item.noun)} is in the <b>${vp.where}</b> of the image.`;
+  } else {
+    el.innerHTML = vp.note || "";
   }
-  S.slot = slot;
-  S.idx = Math.max(0, Math.min(s.n - 1, idx));
-  updateView();
 }
 
-function stepSeries(d) {
-  const slots = S.item.series.map((s) => s.slot);
-  setSlice(slots[(slots.indexOf(S.slot) + d + slots.length) % slots.length]);
+// ---------------------------------------------------------------- status bar, decisions
+function renderStatus() {
+  if (!S.item) return;
+  const vp = S.vps[S.active];
+  const tool = { wl: "Window/level", pan: "Pan", zoom: "Zoom" }[S.tool];
+  $("#st-left").innerHTML = `Study <b>…${esc(S.item.study_short)}</b> · ${esc(S.item.label)}${vp ? ` · ${CODE[vp.slot]} Im <b>${vp.idx + 1}</b>/${seriesOf(vp.slot).n}` : ""}`;
+  $("#st-mid").innerHTML = `Tool <b>${tool}</b> · W <b>${Math.round(S.wl.w)}</b> L <b>${Math.round(S.wl.l)}</b>${S.wl.invert ? " · inverted" : ""}`;
+  const refining = S.vps.some((v) => v.refining);
+  $("#st-right").innerHTML = `Highlight <b>${S.heat ? (refining ? "refining…" : "8×8 occlusion") : "off"}</b> · ${S.layout === 1 ? "1×1" : "2×2"}`;
 }
 
-const strongest = () => setSlice(S.item.start.slot, S.item.start.idx);
-
-// ---------------------------------------------------------------- zoom, pan, brightness
-function applyView() {
-  const lb = $("#lightbox");
-  const maxPan = ((S.zoom - 1) * lb.clientWidth) / 2;
-  S.pan.x = Math.max(-maxPan, Math.min(maxPan, S.pan.x));
-  S.pan.y = Math.max(-maxPan, Math.min(maxPan, S.pan.y));
-  $("#zoomer").style.transform = `translate(${S.pan.x}px, ${S.pan.y}px) scale(${S.zoom})`;
-  $("#slice").style.filter = `brightness(${S.bright}) contrast(${S.contrast})`;
-  lb.classList.toggle("zoomed", S.zoom > 1.001);
-  $("#hud-zoom").textContent = S.zoom > 1.001 ? `${Math.round(S.zoom * 100)}%` : "";
-}
-
-function zoomBy(f, cx = 0, cy = 0) { // cx, cy: pointer offset from the image centre, in screen pixels
-  const z = Math.max(1, Math.min(6, S.zoom * f));
-  S.pan.x = cx - ((cx - S.pan.x) * z) / S.zoom;
-  S.pan.y = cy - ((cy - S.pan.y) * z) / S.zoom;
-  S.zoom = z;
-  if (z === 1) S.pan = { x: 0, y: 0 };
-  applyView();
-}
-
-function resetView(redraw = true) {
-  S.zoom = 1;
-  S.pan = { x: 0, y: 0 };
-  S.bright = 1;
-  S.contrast = 1;
-  $("#bright").value = 1;
-  $("#contrast").value = 1;
-  applyView();
-  if (redraw && S.item) drawHeat();
-}
-
-// ---------------------------------------------------------------- decisions
 async function decide(kind) {
   if (!S.item) return;
   const i = S.i;
   const { data } = await api("/api/decision", { i, decision: kind });
   S.items[i].decision = kind;
   renderTally(data.tally);
-  toast(kind === "unsure" ? "Marked unsure" : `Saved. ${data.saved}`);
+  toast(kind === "unsure" ? "Marked unsure" : `Saved: ${data.saved}`);
   go(nextOpen(i));
 }
 
@@ -471,6 +651,8 @@ function toggleHelp(show) {
   $("#help-toggle").setAttribute("aria-expanded", String(!h.hidden));
 }
 
+function redrawAll() { S.vps.forEach((vp) => { renderCorners(vp); drawHeat(vp); }); renderStatus(); }
+
 // ---------------------------------------------------------------- input
 function bind() {
   $("#queue-form").addEventListener("submit", async (e) => {
@@ -484,100 +666,62 @@ function bind() {
     }
     go(data.first_open);
   });
-  for (const k of ["accept", "deny", "unsure"]) $(`#${k}`).addEventListener("click", () => decide(k));
+  for (const k of ["accept", "deny", "unsure"]) {
+    const b = $(`#${k}`);
+    b.addEventListener("click", () => decide(k));
+    if (k !== "unsure") {
+      for (const ev of ["mouseenter", "focus"]) b.addEventListener(ev, () => S.item && showConsequence(k));
+      for (const ev of ["mouseleave", "blur"]) b.addEventListener(ev, () => S.item && showConsequence(null));
+    }
+  }
   $("#skip").addEventListener("click", () => go(S.i + 1));
   $("#back").addEventListener("click", () => go(S.i - 1));
-  $("#strongest").addEventListener("click", strongest);
-  $("#heat-toggle").addEventListener("click", () => { S.heat = !S.heat; updateView(); });
-  $("#counter-toggle").addEventListener("click", () => { S.counter = !S.counter; updateView(); });
-  $("#alpha").addEventListener("input", (e) => { S.alpha = Number(e.target.value); drawHeat(); });
-  $("#bright").addEventListener("input", (e) => { S.bright = Number(e.target.value); applyView(); });
-  $("#contrast").addEventListener("input", (e) => { S.contrast = Number(e.target.value); applyView(); });
-  $("#zoom-in").addEventListener("click", () => zoomBy(1.25));
-  $("#zoom-out").addEventListener("click", () => zoomBy(0.8));
-  $("#view-reset").addEventListener("click", () => resetView());
-  $("#slice-range").addEventListener("input", (e) => setSlice(S.slot, Number(e.target.value) - 1));
+  document.querySelectorAll("[data-layout]").forEach((b) => b.addEventListener("click", () => setLayout(Number(b.dataset.layout))));
+  document.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
+  $("#invert").addEventListener("click", () => { S.wl.invert = !S.wl.invert; applyWL(); });
+  $("#reset").addEventListener("click", resetAll);
+  $("#strongest").addEventListener("click", () => S.item && strongest());
+  $("#heat-toggle").addEventListener("click", () => { S.heat = !S.heat; $("#heat-toggle").setAttribute("aria-pressed", String(S.heat)); redrawAll(); });
+  $("#counter-toggle").addEventListener("click", () => { S.counter = !S.counter; $("#counter-toggle").setAttribute("aria-pressed", String(S.counter)); redrawAll(); });
+  $("#alpha").addEventListener("input", (e) => { S.alpha = Number(e.target.value); S.vps.forEach(drawHeat); });
   $("#lang-toggle").addEventListener("click", () => { S.original = !S.original; renderReport(); });
   $("#help-toggle").addEventListener("click", () => toggleHelp());
   $("#help-close").addEventListener("click", () => toggleHelp(false));
   $("#help").addEventListener("click", (e) => { if (e.target.id === "help") toggleHelp(false); });
-  $("#series").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-slot]");
-    if (b) setSlice(b.dataset.slot);
+  $("#thumbs").addEventListener("click", (e) => {
+    const b = e.target.closest(".thumb");
+    if (!b || !S.item) return;
+    const shown = S.vps.find((v) => v.slot === b.dataset.slot);
+    if (S.layout === 4 && shown) { setActive(shown.k); return; }
+    setSlice(S.vps[S.active], b.dataset.slot);
   });
-
-  const svg = $("#strip"), tip = $("#tip");
-  svg.addEventListener("click", (e) => {
-    const r = e.target.closest(".bar-hit");
-    if (r) setSlice(r.dataset.slot, Number(r.dataset.k));
-  });
-  svg.addEventListener("mousemove", (e) => {
-    const r = e.target.closest(".bar-hit");
-    if (!r) { tip.hidden = true; return; }
-    const s = S.item.series.find((x) => x.slot === r.dataset.slot), k = Number(r.dataset.k), c = s.contrib[k];
-    const what = strength(c) === "almost no" ? "almost no evidence" : `${strength(c)} push toward ${c > 0 ? "present" : "absent"}`;
-    tip.textContent = `${s.title}, slice ${k + 1}: ${what}`;
-    const box = svg.getBoundingClientRect();
-    tip.style.left = `${Math.min(box.width - 140, Math.max(140, e.clientX - box.left))}px`;
-    tip.hidden = false;
-  });
-  svg.addEventListener("mouseleave", () => { tip.hidden = true; });
-
-  // scroll moves through slices like a PACS viewer; pinch or ctrl+scroll zooms around the pointer
-  const lb = $("#lightbox");
-  let wheel = 0;
-  $("#stage").addEventListener("wheel", (e) => {
-    if (!S.item) return;
-    e.preventDefault();
-    if (e.ctrlKey) {
-      const b = lb.getBoundingClientRect();
-      zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX - b.left - b.width / 2, e.clientY - b.top - b.height / 2);
-      return;
-    }
-    wheel += e.deltaY;
-    if (Math.abs(wheel) >= 40) {
-      setSlice(S.slot, S.idx + Math.sign(wheel));
-      wheel = 0;
-    }
-  }, { passive: false });
-  let drag = null;
-  lb.addEventListener("pointerdown", (e) => {
-    if (S.zoom <= 1.001) return;
-    drag = { x: e.clientX, y: e.clientY, px: S.pan.x, py: S.pan.y };
-    lb.setPointerCapture(e.pointerId);
-    lb.classList.add("panning");
-  });
-  lb.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    S.pan.x = drag.px + e.clientX - drag.x;
-    S.pan.y = drag.py + e.clientY - drag.y;
-    applyView();
-  });
-  const endDrag = () => { drag = null; lb.classList.remove("panning"); };
-  lb.addEventListener("pointerup", endDrag);
-  lb.addEventListener("pointercancel", endDrag);
-  lb.addEventListener("dblclick", () => resetView());
 
   document.addEventListener("keydown", (e) => {
     if (e.target.closest("select, input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") return toggleHelp(false);
     if (e.key === "?") { e.preventDefault(); return toggleHelp(); }
     if (!S.item) return;
-    const k = e.key.toLowerCase();
+    const k = e.key.toLowerCase(), vp = S.vps[S.active];
     const actions = {
       a: () => decide("accept"), d: () => decide("deny"), u: () => decide("unsure"),
       s: () => go(S.i + 1), b: () => go(S.i - 1), g: strongest,
-      h: () => { S.heat = !S.heat; updateView(); },
-      c: () => { S.counter = !S.counter; updateView(); },
+      h: () => $("#heat-toggle").click(), c: () => $("#counter-toggle").click(),
       o: () => { if (!$("#lang-toggle").hidden) { S.original = !S.original; renderReport(); } },
-      arrowleft: () => setSlice(S.slot, S.idx - 1), arrowright: () => setSlice(S.slot, S.idx + 1),
+      l: () => setLayout(S.layout === 1 ? 4 : 1),
+      w: () => setTool("wl"), p: () => setTool("pan"), z: () => setTool("zoom"),
+      i: () => { S.wl.invert = !S.wl.invert; applyWL(); }, r: resetAll, "0": resetAll,
+      arrowleft: () => setSlice(vp, vp.slot, vp.idx - 1), arrowright: () => setSlice(vp, vp.slot, vp.idx + 1),
       arrowup: () => stepSeries(-1), arrowdown: () => stepSeries(1),
-      "+": () => zoomBy(1.25), "=": () => zoomBy(1.25), "-": () => zoomBy(0.8), "0": () => resetView(),
+      tab: () => setActive((S.active + (e.shiftKey ? -1 : 1) + S.vps.length) % S.vps.length),
     };
-    if (/^[1-4]$/.test(k) && S.item.series[Number(k) - 1]) actions[k] = () => setSlice(S.item.series[Number(k) - 1].slot);
+    if (/^[1-4]$/.test(k) && S.item.series[Number(k) - 1]) actions[k] = () => setSlice(vp, S.item.series[Number(k) - 1].slot);
     if (actions[k]) { e.preventDefault(); actions[k](); }
   });
-  window.addEventListener("resize", () => { if (S.item) { drawStrip(); applyView(); drawHeat(); } });
+  let rt;
+  window.addEventListener("resize", () => {
+    clearTimeout(rt);
+    rt = setTimeout(() => { if (S.item) { layoutSquares(); S.vps.forEach((vp) => { drawBar(vp); drawHeat(vp); }); } }, 120);
+  });
 }
 
 (async function init() {
@@ -585,9 +729,12 @@ function bind() {
     const { data } = await api("/api/session");
     applySession(data);
     bind();
+    setLayout(location.hash === "#4" ? 4 : 1); // #4 in the URL opens the four-viewport layout
+    setTool("wl");
+    applyWL();
     if (!data.items.length) { showDone(); $("#done-text").textContent = "Nothing left to review for this selection."; return; }
     await go(data.first_open);
   } catch (err) {
-    document.body.innerHTML = `<p style="padding:24px">The review server isn't answering: ${esc(err.message)}. Restart it with <code>python scripts/review.py</code>.</p>`;
+    document.body.innerHTML = `<p style="padding:24px;color:#ddd;font:14px system-ui">The review server isn't answering: ${esc(err.message)}. Restart it with <code>python scripts/review.py</code>.</p>`;
   }
 })();

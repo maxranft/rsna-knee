@@ -154,6 +154,9 @@ ENS7 the 8 slot-drop-0.3 seeds (42-49)               efficiency candidate, 40 he
 ENS8 the adopted 18 + seeds 47-49                    21-member ensemble              DONE (ens-20261001-114204). ADOPTED
                                                                                      (accurate): gold 0.748, report 0.8017.
                                                                                      +0.0003 vs 18: fully saturated.
+E19 best config + --bootstrap (bagging), seeds 42-44  more ensemble diversity         DONE (20261001-121133, -122855, -124612).
+    (runs/queue_bagging.sh)                                                          REJECTED: single models -0.022 report,
+                                                                                     3-run ensemble -0.0073 (CI -0.010..-0.005).
 Package the efficiency candidate instead:
     .venv/bin/python scripts/package_heads.py runs/ens-20261001-114201   (40 heads; same folder, so upload one at a time) Same inference architecture, so
                                                      ensemble                        they can join the 15 packaged heads.

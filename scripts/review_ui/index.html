@@ -3,136 +3,144 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Knee review</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <title>Knee MRI Review</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="bar">
-    <div class="where">
+  <!-- window/level as an exact linear transfer on the 8-bit slice: out = in * slope + intercept (per channel) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="wl" color-interpolation-filters="sRGB">
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="1" intercept="0"/>
+        <feFuncG type="linear" slope="1" intercept="0"/>
+        <feFuncB type="linear" slope="1" intercept="0"/>
+      </feComponentTransfer>
+    </filter>
+  </svg>
+
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Knee MRI Review</div>
+    <form class="queue" id="queue-form">
+      <label>Worklist
+        <select id="q-mode">
+          <option value="disagree">Biggest disagreements</option>
+          <option value="gold">Gold studies</option>
+          <option value="random">Random sample</option>
+        </select>
+      </label>
+      <label>Finding
+        <select id="q-label"><option value="">All</option></select>
+      </label>
+      <button type="submit" class="btn">Load</button>
+    </form>
+    <div class="progress">
       <span id="position">Loading…</span>
       <div class="track" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
     </div>
-    <form class="queue" id="queue-form">
-      <label>Review
-        <select id="q-mode">
-          <option value="disagree">biggest disagreements</option>
-          <option value="gold">gold studies only</option>
-          <option value="random">a random sample</option>
-        </select>
-      </label>
-      <label>for
-        <select id="q-label"><option value="">all findings</option></select>
-      </label>
-      <button type="submit" class="quiet">Load</button>
-    </form>
     <p class="tally" id="tally"></p>
-    <button type="button" class="quiet" id="help-toggle" aria-expanded="false"><kbd>?</kbd> Keys</button>
   </header>
 
+  <div class="toolbar" role="toolbar" aria-label="Viewer tools">
+    <div class="tgroup" role="group" aria-label="Layout">
+      <button type="button" class="tool" data-layout="1" title="Single viewport (L)" aria-label="Single viewport"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="1"/></svg></button>
+      <button type="button" class="tool" data-layout="4" title="Four viewports, all series (L)" aria-label="Four viewports"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="11" y="3" width="6" height="6" rx="1"/><rect x="3" y="11" width="6" height="6" rx="1"/><rect x="11" y="11" width="6" height="6" rx="1"/></svg></button>
+    </div>
+    <div class="tgroup" role="group" aria-label="Mouse tool">
+      <button type="button" class="tool" data-tool="wl" title="Window / level: drag left-right for width, up-down for level (W)" aria-label="Window level"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 1 0 14z" class="fill"/></svg><span>W/L</span></button>
+      <button type="button" class="tool" data-tool="pan" title="Pan (P)" aria-label="Pan"><svg viewBox="0 0 20 20"><path d="M10 2v16M2 10h16M10 2l-2.5 2.5M10 2l2.5 2.5M10 18l-2.5-2.5M10 18l2.5-2.5M2 10l2.5-2.5M2 10l2.5 2.5M18 10l-2.5-2.5M18 10l-2.5 2.5"/></svg><span>Pan</span></button>
+      <button type="button" class="tool" data-tool="zoom" title="Zoom: drag up or down; also pinch or ctrl+scroll (Z)" aria-label="Zoom"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.5 12.5L18 18M6 8.5h5M8.5 6v5"/></svg><span>Zoom</span></button>
+    </div>
+    <div class="tgroup" role="group" aria-label="Image">
+      <button type="button" class="tool" id="invert" title="Invert (I)" aria-label="Invert" aria-pressed="false"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="1"/><path d="M3 3h14L3 17z" class="fill"/></svg></button>
+      <button type="button" class="tool" id="reset" title="Reset window, zoom and pan (R)" aria-label="Reset view"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5M4 3v3h3"/></svg></button>
+    </div>
+    <div class="tgroup" role="group" aria-label="Model evidence">
+      <button type="button" class="tool" id="heat-toggle" title="Highlight: where the model's evidence for the finding sits (H)" aria-pressed="true"><svg viewBox="0 0 20 20"><path d="M4 12c0-4 3-7 6-9 3 2 6 5 6 9a6 6 0 0 1-12 0z"/></svg><span>Highlight</span></button>
+      <button type="button" class="tool" id="counter-toggle" title="Also show evidence against, dashed blue (C)" aria-pressed="false"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" stroke-dasharray="3 2.4"/></svg><span>Against</span></button>
+      <label class="opacity" title="Highlight opacity"><span>Opacity</span><input type="range" id="alpha" min="0.15" max="1" step="0.05" value="0.65"></label>
+      <button type="button" class="tool" id="strongest" title="Go to the model's strongest-evidence slice (G)"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3.5"/><circle cx="10" cy="10" r="0.9" class="fill"/></svg><span>Strongest</span></button>
+    </div>
+    <div class="tgroup end">
+      <button type="button" class="tool" id="help-toggle" title="Keyboard shortcuts (?)" aria-expanded="false"><span>Shortcuts</span><kbd>?</kbd></button>
+    </div>
+  </div>
+
   <main id="main">
+    <nav class="browser" aria-label="Series">
+      <div class="browser-head" id="study-head"></div>
+      <div class="thumbs" id="thumbs"></div>
+    </nav>
+
     <section class="viewer" aria-label="Images">
-      <div class="viewer-head">
-        <nav class="series" id="series" role="tablist" aria-label="Series"></nav>
-        <button type="button" class="quiet strong-btn" id="strongest"><kbd>G</kbd> Strongest slice</button>
-      </div>
-
-      <div class="stage" id="stage">
-        <div class="lightbox" id="lightbox">
-          <div class="zoomer" id="zoomer">
-            <img id="slice" alt="" draggable="false">
-            <canvas id="heat" aria-hidden="true"></canvas>
-          </div>
-          <div class="pending" id="pending" hidden></div>
-          <div class="hud hud-tl" id="hud-slice"></div>
-          <div class="hud hud-tr" id="hud-status"></div>
-          <div class="hud hud-bl" id="hud-legend"></div>
-          <div class="hud hud-br" id="hud-zoom"></div>
-        </div>
-      </div>
-
-      <p class="locate" id="locate"></p>
-
-      <div class="tools">
-        <label class="slider slice-slider">
-          <span>Slice</span>
-          <input type="range" id="slice-range" min="1" max="1" value="1">
-          <output id="slice-out"></output>
-        </label>
-        <div class="tool-group" role="group" aria-label="Highlight">
-          <button type="button" class="toggle" id="heat-toggle" aria-pressed="true"><kbd>H</kbd> Highlight</button>
-          <button type="button" class="toggle" id="counter-toggle" aria-pressed="false"><kbd>C</kbd> Counter-evidence</button>
-          <label class="slider mini"><span>Opacity</span><input type="range" id="alpha" min="0.15" max="1" step="0.05" value="0.65"></label>
-        </div>
-        <div class="tool-group" role="group" aria-label="Image">
-          <label class="slider mini"><span>Brightness</span><input type="range" id="bright" min="0.5" max="2" step="0.05" value="1"></label>
-          <label class="slider mini"><span>Contrast</span><input type="range" id="contrast" min="0.5" max="2.5" step="0.05" value="1"></label>
-          <button type="button" class="quiet" id="zoom-out" aria-label="Zoom out"><kbd>−</kbd></button>
-          <button type="button" class="quiet" id="zoom-in" aria-label="Zoom in"><kbd>+</kbd></button>
-          <button type="button" class="quiet" id="view-reset"><kbd>0</kbd> Reset view</button>
-        </div>
-      </div>
-
-      <figure class="strip">
-        <svg id="strip" role="img" aria-label="Evidence per slice"></svg>
-        <figcaption><span class="sw present"></span>Bars above the line push toward present, <span class="sw absent"></span>below toward absent. Click a bar to open that slice.</figcaption>
-        <div class="tip" id="tip" hidden></div>
-      </figure>
+      <div class="verdict" id="verdict" aria-live="polite"></div>
+      <div class="grid" id="grid"></div>
     </section>
 
-    <aside class="panel" aria-label="Decision">
+    <aside class="panel" aria-label="Assessment">
       <div class="panel-scroll">
-        <p class="finding" id="finding"></p>
-        <h1 id="question"></h1>
-        <div class="cards" id="cards"></div>
-        <p class="agree" id="agree"></p>
-        <section class="evidence">
-          <h2>What the model used</h2>
-          <p id="summary"></p>
+        <div class="finding">
+          <p class="eyebrow" id="finding"></p>
+          <h1 id="question"></h1>
+        </div>
+        <section class="block">
+          <h2>Assessment</h2>
+          <table class="assess" id="assess"></table>
+          <p class="agree" id="agree"></p>
         </section>
-        <section class="report">
-          <div class="report-head">
+        <section class="block">
+          <h2>Model evidence</h2>
+          <p id="summary"></p>
+          <p class="locate" id="locate"></p>
+          <p class="fine-print">The highlight explains this model's decision. It is not a diagnosis.</p>
+        </section>
+        <section class="block report">
+          <div class="block-head">
             <h2>Report</h2>
-            <button type="button" class="quiet" id="lang-toggle"><kbd>O</kbd> <span>Show original</span></button>
+            <button type="button" class="link" id="lang-toggle"><span>Show original</span> <kbd>O</kbd></button>
           </div>
           <p class="hits" id="hits"></p>
           <div class="sentences" id="sentences"></div>
         </section>
       </div>
       <div class="decide">
-        <button type="button" class="choice" id="accept"><kbd>A</kbd><span class="t"></span><span class="d"></span></button>
-        <button type="button" class="choice" id="deny"><kbd>D</kbd><span class="t"></span><span class="d"></span></button>
-        <div class="minor">
-          <button type="button" class="quiet" id="unsure"><kbd>U</kbd> Unsure</button>
-          <button type="button" class="quiet" id="skip"><kbd>S</kbd> Skip</button>
-          <button type="button" class="quiet" id="back"><kbd>B</kbd> Back</button>
+        <p class="consequence" id="consequence"></p>
+        <div class="decide-row">
+          <button type="button" class="btn decision" id="accept"><kbd>A</kbd> Accept</button>
+          <button type="button" class="btn decision" id="deny"><kbd>D</kbd> Deny</button>
+          <button type="button" class="btn" id="unsure"><kbd>U</kbd> Unsure</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn subtle" id="back"><kbd>B</kbd> Back</button>
+          <button type="button" class="btn subtle" id="skip"><kbd>S</kbd> Skip</button>
         </div>
       </div>
     </aside>
   </main>
 
+  <footer class="status" id="status"><span id="st-left"></span><span id="st-mid"></span><span id="st-right"></span></footer>
+
   <section class="done" id="done" hidden>
-    <h1>Queue finished</h1>
+    <h1>Worklist complete</h1>
     <p id="done-text"></p>
-    <p>Pick another queue at the top to keep going.</p>
+    <p>Choose another worklist at the top to continue.</p>
   </section>
 
   <div class="help" id="help" hidden>
     <div class="help-card" role="dialog" aria-label="Keyboard shortcuts">
-      <h2>Keys</h2>
+      <h2>Keyboard shortcuts</h2>
       <dl>
-        <dt><kbd>A</kbd> <kbd>D</kbd></dt><dd>Accept or deny the model's call</dd>
-        <dt><kbd>U</kbd> <kbd>S</kbd> <kbd>B</kbd></dt><dd>Unsure, skip, back</dd>
-        <dt><kbd>←</kbd> <kbd>→</kbd> or scroll</dt><dd>Previous or next slice</dd>
-        <dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>1</kbd>–<kbd>4</kbd></dt><dd>Change series</dd>
-        <dt><kbd>G</kbd></dt><dd>Go to the model's strongest-evidence slice</dd>
-        <dt><kbd>H</kbd> <kbd>C</kbd></dt><dd>Highlight on or off; also show counter-evidence (blue)</dd>
-        <dt><kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd></dt><dd>Zoom in, out, reset (pinch or ctrl+scroll also zooms; drag to pan)</dd>
+        <dt><kbd>A</kbd> <kbd>D</kbd> <kbd>U</kbd></dt><dd>Accept, deny, unsure</dd>
+        <dt><kbd>S</kbd> <kbd>B</kbd></dt><dd>Skip, back</dd>
+        <dt>Scroll, <kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous or next image in the active viewport</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd>, <kbd>1</kbd>–<kbd>4</kbd></dt><dd>Change series in the active viewport</dd>
+        <dt><kbd>L</kbd></dt><dd>Switch between one and four viewports</dd>
+        <dt><kbd>W</kbd> <kbd>P</kbd> <kbd>Z</kbd></dt><dd>Mouse tool: window/level, pan, zoom</dd>
+        <dt><kbd>I</kbd> <kbd>R</kbd></dt><dd>Invert; reset window, zoom and pan</dd>
+        <dt><kbd>G</kbd></dt><dd>Go to the model's strongest-evidence image</dd>
+        <dt><kbd>H</kbd> <kbd>C</kbd></dt><dd>Highlight on or off; also show evidence against</dd>
         <dt><kbd>O</kbd></dt><dd>Report in the original language</dd>
       </dl>
-      <button type="button" class="quiet" id="help-close">Close</button>
+      <p class="fine-print">Ctrl+scroll or pinch zooms at the pointer. Double-click a viewport to reset it.</p>
+      <button type="button" class="btn" id="help-close">Close</button>
     </div>
   </div>
 
