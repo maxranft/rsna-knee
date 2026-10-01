@@ -9,8 +9,10 @@ the model's probability next to the training label and the gold label, a plain-E
 and the report in English with the sentences about the finding highlighted.
 
 Evidence is occlusion on the study head: how much the finding's score (log-odds) drops when one slice is removed, and,
-for the slice on screen, when one of its 16 image regions is blanked (replaced by the slice's average region).
-It explains this model's decision; it is not a diagnosis.
+for the slice on screen, where in the image: first a coarse 4x4 map (each cached region token blanked), then a finer
+8x8 map (each 32-pixel block of the slice blanked to its mean intensity and the slice re-encoded by the frozen encoder
+on the CPU, ~2 s). The finer map drives the red highlight and outline. It explains this model's decision; it is not a
+diagnosis.
 
 Decisions go to meta/reviews.csv with what they imply (the finding's true state, whether the model and the training
 label were right). Graded items leave the queue. Images and reports stay on this machine: never paste them into a chat.
@@ -209,6 +211,7 @@ class RealSource:
         self.oof = self.oof[self.oof.StudyInstanceUID.isin(set(self.index.StudyInstanceUID))]
         self.shard_of = self.index.drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID").shard
         self.models, self.lock, self.stacks, self._tokens = {}, threading.Lock(), {}, {}
+        self.feats_dir, self._enc, self._pca, self.enc_lock = fd, None, None, threading.Lock()
         self._tr, self._tr_mtime = {}, None
         self.fetch_translations()
 
@@ -312,6 +315,48 @@ class RealSource:
             out = m(xb, slot.expand(16, -1), depth.expand(16, -1), torch.zeros(16, n, dtype=torch.bool))[:, k]
         return (full - out).numpy().round(5).tolist()
 
+    def encoder(self):
+        """Frozen encoder in float32 on the CPU (training may be using the GPU), plus the run's PCA projection."""
+        if self._enc is None:
+            from knee.features import load_encoder
+            torch.set_num_threads(4)
+            self._enc = load_encoder("cpu", half=False)
+            if self.cfg["dim"] != self._enc.num_features:
+                z = np.load(Path(self.feats_dir) / "pca.npz")
+                self._pca = (torch.as_tensor(z["mean"]), torch.as_tensor(z["components"]))
+        return self._enc
+
+    @torch.no_grad()
+    def fine_region(self, u, fold, label, slot_name, idx, n=8):
+        """Pixel occlusion on one slice -> n*n values (row-major), or None while its images download: score with the
+        slice as is minus score with that block of the image set to the slice's mean intensity, re-encoded.
+        Positive = the block pushed toward present. Re-encoding the untouched slice reproduces the cached features
+        (cosine 1.0000, checked 2026-10-01)."""
+        st = self.stack(u)
+        if st is None:
+            return None
+        from knee.features import encode
+        img = st[slot_name][int(idx)]
+        b = img.shape[0] // n
+        batch = np.repeat(img[None], n * n + 1, 0)
+        fill = np.uint8(round(float(img.mean())))
+        for k in range(n * n):
+            r, c = divmod(k, n)
+            batch[k + 1, r * b:(r + 1) * b, c * b:(c + 1) * b] = fill
+        with self.enc_lock:
+            enc = self.encoder()
+            tok = encode(enc, batch, "cpu", batch=len(batch), half=False)
+        if self._pca is not None:
+            tok = (tok - self._pca[0]) @ self._pca[1].T
+        x, slot, depth, rows = self.tokens(u)
+        t = sum(r["length"] for r in rows[:[r["slot"] for r in rows].index(slot_name)]) + int(idx)
+        k, m, N = LABELS.index(label), self.model(fold), x.shape[1]
+        xb = x.expand(len(batch), -1, -1, -1).clone()
+        xb[:, t] = tok
+        with self.lock:
+            out = m(xb, slot.expand(len(batch), -1), depth.expand(len(batch), -1), torch.zeros(len(batch), N, dtype=torch.bool))[:, k]
+        return (out[0] - out[1:]).numpy().round(5).tolist()
+
     def report(self, u):
         tr = self.translations().get(u)
         if tr:
@@ -364,6 +409,13 @@ class DemoSource:
         g[rng.integers(4), rng.integers(4)] = rng.choice([-1, 1]) * 0.2
         return (g + rng.normal(0, 0.02, (4, 4))).ravel().round(5).tolist()
 
+    def fine_region(self, u, fold, label, slot_name, idx, n=8):
+        rng = np.random.default_rng(sum(map(ord, u + label + slot_name)) + idx)
+        cy, cx = rng.uniform(1.5, n - 2.5, 2)
+        yy, xx = np.mgrid[:n, :n]
+        blob = np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / 1.6) * 0.25
+        return (blob - 0.04 * np.exp(-((yy - (n - 1 - cy)) ** 2 + (xx - (n - 1 - cx)) ** 2) / 2) + rng.normal(0, 0.004, (n, n))).ravel().round(5).tolist()
+
     def report(self, u):
         pairs = [("Primjer rečenice jedan.", "Example sentence one: the anterior cruciate ligament is continuous."),
                  ("Primjer rečenice dva.", "Example sentence two: no joint effusion."),
@@ -392,7 +444,7 @@ class App:
         with self.lock:
             self.mode, self.label, self.n = mode, label or "", n
             self.q = self.src.queue(mode, label or None, n)
-            self.cache, self.decisions, self.flags = {}, {}, {}
+            self.cache, self.decisions, self.flags, self.fine_cache = {}, {}, {}, {}
 
     def session(self):
         q = self.q
@@ -431,6 +483,18 @@ class App:
     def region(self, i, slot, idx):
         r = self.q.iloc[i]
         return {"grid": self.src.region(r.study, int(r.fold), r.label, slot, idx)}
+
+    def fine(self, i, slot, idx):
+        key = (i, slot, int(idx))
+        if key not in self.fine_cache:
+            r = self.q.iloc[i]
+            grid = self.src.fine_region(r.study, int(r.fold), r.label, slot, int(idx))
+            if grid is None:
+                return None
+            self.fine_cache[key] = {"grid": grid, "n": int(round(len(grid) ** 0.5))}
+            if len(self.fine_cache) > 300:
+                self.fine_cache.pop(next(iter(self.fine_cache)))
+        return self.fine_cache[key]
 
     def image(self, i, slot, idx):
         st = self.src.stack(self.q.iloc[i].study)
@@ -493,6 +557,10 @@ def make_handler(app):
                 m = re.fullmatch(r"/api/region/(\d+)/(\w+)/(\d+)", p)
                 if m:
                     return self.send(200, app.region(int(m[1]), m[2], int(m[3])))
+                m = re.fullmatch(r"/api/fine/(\d+)/(\w+)/(\d+)", p)
+                if m:
+                    d = app.fine(int(m[1]), m[2], int(m[3]))
+                    return self.send(200, d) if d is not None else self.send(202, {"pending": True})
                 m = re.fullmatch(r"/api/image/(\d+)/(\w+)/(\d+)\.png", p)
                 if m:
                     png = app.image(int(m[1]), m[2], int(m[3]))

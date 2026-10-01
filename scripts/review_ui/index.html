@@ -29,33 +29,65 @@
       <button type="submit" class="quiet">Load</button>
     </form>
     <p class="tally" id="tally"></p>
+    <button type="button" class="quiet" id="help-toggle" aria-expanded="false"><kbd>?</kbd> Keys</button>
   </header>
 
   <main id="main">
     <section class="viewer" aria-label="Images">
-      <div class="rail">
-        <nav class="series" id="series" aria-label="Series"></nav>
-        <p id="slice-caption"></p>
-        <button type="button" class="quiet" id="heat-toggle"><kbd>H</kbd> <span>Hide heat map</span></button>
+      <div class="viewer-head">
+        <nav class="series" id="series" role="tablist" aria-label="Series"></nav>
+        <button type="button" class="quiet strong-btn" id="strongest"><kbd>G</kbd> Strongest slice</button>
       </div>
+
       <div class="stage" id="stage">
         <div class="lightbox" id="lightbox">
-          <img id="slice" alt="">
-          <canvas id="heat" aria-hidden="true"></canvas>
+          <div class="zoomer" id="zoomer">
+            <img id="slice" alt="" draggable="false">
+            <canvas id="heat" aria-hidden="true"></canvas>
+          </div>
           <div class="pending" id="pending" hidden></div>
+          <div class="hud hud-tl" id="hud-slice"></div>
+          <div class="hud hud-tr" id="hud-status"></div>
+          <div class="hud hud-bl" id="hud-legend"></div>
+          <div class="hud hud-br" id="hud-zoom"></div>
         </div>
       </div>
+
+      <p class="locate" id="locate"></p>
+
+      <div class="tools">
+        <label class="slider slice-slider">
+          <span>Slice</span>
+          <input type="range" id="slice-range" min="1" max="1" value="1">
+          <output id="slice-out"></output>
+        </label>
+        <div class="tool-group" role="group" aria-label="Highlight">
+          <button type="button" class="toggle" id="heat-toggle" aria-pressed="true"><kbd>H</kbd> Highlight</button>
+          <button type="button" class="toggle" id="counter-toggle" aria-pressed="false"><kbd>C</kbd> Counter-evidence</button>
+          <label class="slider mini"><span>Opacity</span><input type="range" id="alpha" min="0.15" max="1" step="0.05" value="0.65"></label>
+        </div>
+        <div class="tool-group" role="group" aria-label="Image">
+          <label class="slider mini"><span>Brightness</span><input type="range" id="bright" min="0.5" max="2" step="0.05" value="1"></label>
+          <label class="slider mini"><span>Contrast</span><input type="range" id="contrast" min="0.5" max="2.5" step="0.05" value="1"></label>
+          <button type="button" class="quiet" id="zoom-out" aria-label="Zoom out"><kbd>−</kbd></button>
+          <button type="button" class="quiet" id="zoom-in" aria-label="Zoom in"><kbd>+</kbd></button>
+          <button type="button" class="quiet" id="view-reset"><kbd>0</kbd> Reset view</button>
+        </div>
+      </div>
+
       <figure class="strip">
         <svg id="strip" role="img" aria-label="Evidence per slice"></svg>
-        <figcaption>Evidence per slice. <span class="sw present"></span>Above the line pushes toward present, <span class="sw absent"></span>below toward absent. Click a bar, use <kbd>←</kbd><kbd>→</kbd> and <kbd>↑</kbd><kbd>↓</kbd>, or scroll on the image to move.</figcaption>
+        <figcaption><span class="sw present"></span>Bars above the line push toward present, <span class="sw absent"></span>below toward absent. Click a bar to open that slice.</figcaption>
         <div class="tip" id="tip" hidden></div>
       </figure>
     </section>
 
     <aside class="panel" aria-label="Decision">
       <div class="panel-scroll">
+        <p class="finding" id="finding"></p>
         <h1 id="question"></h1>
-        <dl class="opinions" id="opinions"></dl>
+        <div class="cards" id="cards"></div>
+        <p class="agree" id="agree"></p>
         <section class="evidence">
           <h2>What the model used</h2>
           <p id="summary"></p>
@@ -86,6 +118,23 @@
     <p id="done-text"></p>
     <p>Pick another queue at the top to keep going.</p>
   </section>
+
+  <div class="help" id="help" hidden>
+    <div class="help-card" role="dialog" aria-label="Keyboard shortcuts">
+      <h2>Keys</h2>
+      <dl>
+        <dt><kbd>A</kbd> <kbd>D</kbd></dt><dd>Accept or deny the model's call</dd>
+        <dt><kbd>U</kbd> <kbd>S</kbd> <kbd>B</kbd></dt><dd>Unsure, skip, back</dd>
+        <dt><kbd>←</kbd> <kbd>→</kbd> or scroll</dt><dd>Previous or next slice</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>1</kbd>–<kbd>4</kbd></dt><dd>Change series</dd>
+        <dt><kbd>G</kbd></dt><dd>Go to the model's strongest-evidence slice</dd>
+        <dt><kbd>H</kbd> <kbd>C</kbd></dt><dd>Highlight on or off; also show counter-evidence (blue)</dd>
+        <dt><kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd></dt><dd>Zoom in, out, reset (pinch or ctrl+scroll also zooms; drag to pan)</dd>
+        <dt><kbd>O</kbd></dt><dd>Report in the original language</dd>
+      </dl>
+      <button type="button" class="quiet" id="help-close">Close</button>
+    </div>
+  </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>
