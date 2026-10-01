@@ -522,7 +522,7 @@ def make_handler(app):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run", help="runs/<id> to review (default: latest finished run)")
-    p.add_argument("--feats", default=str(ROOT / "data/features/dinov2s"))
+    p.add_argument("--feats", help="feature cache (default: the one the run was trained on, from its config.json)")
     p.add_argument("--labels", default=str(ROOT / "data/labeller/all-v2/report_scores_all.csv"))
     p.add_argument("--n", type=int, default=50, help="queue length")
     p.add_argument("--port", type=int, default=8765)
@@ -533,7 +533,8 @@ def main():
         app = App(DemoSource(), ROOT / "runs/demo_reviews.csv", args.n)
     else:
         run = Path(args.run) if args.run else latest_run()
-        app = App(RealSource(run, args.feats, args.labels), REVIEWS, args.n)
+        feats = args.feats or str(ROOT / json.loads((run / "config.json").read_text())["feats"])
+        app = App(RealSource(run, feats, args.labels), REVIEWS, args.n)
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
     url = f"http://127.0.0.1:{args.port}"
     print(f"review tool on {url} (run {app.src.run.name}, {len(app.q)} items). Ctrl+C to stop.", flush=True)

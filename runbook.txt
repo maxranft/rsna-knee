@@ -5,6 +5,16 @@ Metric reminder: gold macro AUC (58 studies) decides. Gold differences below ~0.
 Report macro AUC (4,349 studies) is the steadier signal for choosing between models.
 
 
+START HERE: three launchers in start/ (double-click in Finder, or run them in a terminal)
+  start/1_review_tool.command          front-end visuals: the review tool at http://127.0.0.1:8765 (images, reports;
+                                       for you only). RUN=runs/<id> picks a model; default is the latest run.
+  start/2_results_dashboard.command    results visuals: rebuilds runs/dashboard.html and opens it (metrics only).
+  start/3_background_training.command  background training: 3 new seeds of the best config (or a queue file you
+                                       pass), one at a time, Mac kept awake, live log in the window. Ctrl+C or
+                                       closing the window stops watching, not training.
+  start/4_allow_lid_closed.command     let training run with the lid closed: switches macOS sleep off (your password)
+                                       until the running queue ends, then back on. Desk only, ideally plugged in.
+
 1. EXPERIMENTS (the head trained on cached features, 5 folds, fixed seed)
 ------------------------------------------------------------------------
 KEEP THE MAC AWAKE during a queue, on AC power: caffeinate -is -w <queue pid>
@@ -127,7 +137,22 @@ E17 E15 flags + --slice-drop 0.2                     both input regularisers    
 --- Round 8 (runs/queue11.sh): aim at gold, the arbiter ---
 E18 E15 flags + --gold-repeat 10, seeds 42-44        gold studies 10x per epoch      DONE (20260930-083719, -090049, -092428).
                                                                                      REJECTED: gold within noise (+0.004 ens.,
-                                                                                     CI +-0.022), report -0.0024. Same inference architecture, so
+                                                                                     CI +-0.022), report -0.0024.
+E15 seeds 45-46 (runs/queue12.sh)                    ensemble members                DONE (20260930-094851, -100721).
+ENS5 5 slot-drop-0.3 seeds                           efficiency candidate, 25 heads  DONE (ens-20260930-125254). ADOPTED
+                                                                                     (efficiency): gold 0.755, report 0.799.
+ENS6 the adopted 16 + seeds 45-46                    18-member ensemble              DONE (ens-20260930-125255). ADOPTED
+                                                                                     (accurate): gold 0.748, report 0.8014.
+                                                                                     Saturated: +0.0004 report vs 16-member.
+Seeds 47-49 of the best config (start/3_background_training.command, 2026-09-30): runs 20260930-164823, -175418,
+-180724; gold 0.743/0.722/0.743, report 0.789/0.786/0.788.
+ENS7 the 8 slot-drop-0.3 seeds (42-49)               efficiency candidate, 40 heads  DONE (ens-20261001-114201). ADOPTED
+                                                                                     (efficiency): gold 0.7565, report 0.8004.
+ENS8 the adopted 18 + seeds 47-49                    21-member ensemble              DONE (ens-20261001-114204). ADOPTED
+                                                                                     (accurate): gold 0.748, report 0.8017.
+                                                                                     +0.0003 vs 18: fully saturated.
+Package the efficiency candidate instead:
+    .venv/bin/python scripts/package_heads.py runs/ens-20261001-114201   (40 heads; same folder, so upload one at a time) Same inference architecture, so
                                                      ensemble                        they can join the 15 packaged heads.
 
 Queue files: runs/queue3.sh runs its lines one after another (nohup runs/queue3.sh > runs/queue3.out &),
@@ -209,7 +234,7 @@ rsna-knee-features-dinov2s-parts   CPU    Splits the cache into ~200 MB parts fo
 rsna-knee-translate                GPU    English translations of reports, for review.py only.
 rsna-knee-assets                   CPU    Saves the encoder weights for the offline submission.
   Package heads for the submission (nothing is uploaded):
-    .venv/bin/python scripts/package_heads.py runs/ens-20260930-065156   -> build/rsna-knee-heads (80 heads + pca.npz)
+    .venv/bin/python scripts/package_heads.py runs/ens-20261001-114204   -> build/rsna-knee-heads (105 heads + pca.npz)
     .venv/bin/kaggle datasets create -p build/rsna-knee-heads            (first upload; later: datasets version)
 
 rsna-knee-submit                   GPU    Offline submission: test DICOM -> stacks -> encoder -> every fold head.

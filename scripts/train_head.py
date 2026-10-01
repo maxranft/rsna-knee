@@ -70,6 +70,7 @@ def main():
     p.add_argument("--slice-drop", type=float, default=0.0, help="training: drop each slice with this probability")
     p.add_argument("--slot-drop", type=float, default=0.1, help="training: drop each series slot with this probability")
     p.add_argument("--gold-repeat", type=int, default=1, help="training: list each gold study this many times per epoch")
+    p.add_argument("--bootstrap", action="store_true", help="bagging: train each fold on a bootstrap resample of its training studies")
     p.add_argument("--folds", default="0,1,2,3,4")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--bs", type=int, default=16)
@@ -124,6 +125,8 @@ def main():
     for f in fold_list:
         tr = folds.StudyInstanceUID[folds.fold != f].tolist()
         tr += [u for u in tr if u in gold_ids] * (args.gold_repeat - 1)  # upweight gold labels by repetition
+        if args.bootstrap:  # same size, drawn with replacement; differs per seed and fold
+            tr = [str(u) for u in np.random.default_rng(args.seed * 100 + f).choice(tr, size=len(tr), replace=True)]
         va = folds.StudyInstanceUID[folds.fold == f].tolist()
         dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f, left=left,
                                                     slice_drop=args.slice_drop, slot_drop=args.slot_drop), batch_size=args.bs,
