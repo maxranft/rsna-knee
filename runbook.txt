@@ -5,9 +5,12 @@ Metric reminder: gold macro AUC (58 studies) decides. Gold differences below ~0.
 Report macro AUC (4,349 studies) is the steadier signal for choosing between models.
 
 
-START HERE: three launchers in start/ (double-click in Finder, or run them in a terminal)
-  start/1_review_tool.command          front-end visuals: the review tool at http://127.0.0.1:8765 (images, reports;
-                                       for you only). RUN=runs/<id> picks a model; default is the latest run.
+START HERE: launchers in start/ (double-click in Finder, or run them in a terminal)
+  start/0_run_project.command          RUN PROJECT ("run project" to Claude): training + dashboard + grading window.
+  start/1_review_tool.command          front-end visuals: the grading tool at http://127.0.0.1:8765 (images, reports;
+                                       for you only). Red outline = where the model's evidence for the finding sits
+                                       on the slice (8x8 occlusion, re-encoded). Zoom, brightness/contrast, G = jump
+                                       to the strongest slice, ? = all keys. RUN=runs/<id> picks a model.
   start/2_results_dashboard.command    results visuals: rebuilds runs/dashboard.html and opens it (metrics only).
   start/3_background_training.command  background training: 3 new seeds of the best config (or a queue file you
                                        pass), one at a time, Mac kept awake, live log in the window. Ctrl+C or

@@ -2,9 +2,14 @@
 // Review tool front end. Talks to scripts/review.py on localhost; nothing leaves this machine.
 
 const $ = (s) => document.querySelector(s);
-const S = { items: [], i: 0, item: null, slot: null, idx: 0, heat: true, original: false, imgToken: 0, goToken: 0, regions: {} };
+const S = {
+  items: [], i: 0, item: null, slot: null, idx: 0, original: false, imgToken: 0, goToken: 0,
+  heat: true, counter: false, alpha: 0.65, regions: {}, fine: {},
+  bright: 1, contrast: 1, zoom: 1, pan: { x: 0, y: 0 },
+};
 const SHORT = { sag_fs: "Sagittal", cor_fs: "Coronal", ax_fs: "Axial", t1: "T1" };
 const SUB = { sag_fs: "fluid-sensitive", cor_fs: "fluid-sensitive", ax_fs: "fluid-sensitive", t1: "not fluid-sensitive" };
+const RED = [230, 103, 103], BLUE = [57, 135, 229];
 const pct = (p) => `${Math.round(p * 100)}%`;
 const stateOf = (p) => (p >= 0.5 ? "present" : "absent");
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -43,8 +48,10 @@ async function go(i) {
   S.i = i;
   S.item = data;
   S.regions = {};
+  S.fine = {};
   S.slot = data.start.slot;
   S.idx = data.start.idx;
+  resetView(false);
   renderItem();
 }
 
@@ -53,22 +60,24 @@ function nextOpen(after) {
   return k === -1 ? S.items.length : k;
 }
 
-// ---------------------------------------------------------------- item
+// ---------------------------------------------------------------- item panel
+function card(name, p) {
+  const st = stateOf(p);
+  return `<div class="card ${st}"><div class="k">${name}</div><div class="v">${pct(p)}</div><div class="s">${st}</div></div>`;
+}
+
 function renderItem() {
   const it = S.item;
   $("#position").textContent = `Item ${it.i + 1} of ${it.n}`;
   $("#track-fill").style.width = `${(100 * S.items.filter((x) => x.decision).length) / Math.max(1, it.n)}%`;
+  $("#finding").textContent = it.label;
   $("#question").textContent = it.question;
-
-  const opinion = (name, p) =>
-    `<dt>${name}</dt><dd><div class="opinion"><div class="meter"><i style="width:${(p * 100).toFixed(1)}%"></i></div>` +
-    `<span class="value">${pct(p)}<span class="state">${stateOf(p)}</span></span></div></dd>`;
-  const gold = it.gold === null ? "Not in the gold set" : `Radiologist-checked: ${it.gold ? "present" : "absent"}`;
+  const gold = it.gold === null
+    ? `<div class="card none"><div class="k">Gold label</div><div class="v">Not in gold set</div></div>`
+    : `<div class="card ${it.gold ? "present" : "absent"}"><div class="k">Gold label</div><div class="v">${it.gold ? "Yes" : "No"}</div><div class="s">${it.gold ? "present" : "absent"}</div></div>`;
+  $("#cards").innerHTML = card("Model", it.model) + card("Training label", it.report_label) + gold;
   const agree = stateOf(it.model) === stateOf(it.report_label);
-  $("#opinions").innerHTML =
-    opinion("Model", it.model) + opinion("Training label", it.report_label) +
-    `<dt>Gold label</dt><dd>${gold}</dd>` +
-    `<p class="verdict-line">The model and the training label <strong>${agree ? "agree" : "disagree"}</strong>.</p>`;
+  $("#agree").innerHTML = `The model and the training label <strong>${agree ? "agree" : "disagree"}</strong>.`;
   $("#summary").textContent = it.summary;
 
   renderReport();
@@ -106,6 +115,7 @@ function renderReport() {
 
 // ---------------------------------------------------------------- viewer
 const series = () => S.item.series.find((s) => s.slot === S.slot);
+const sliceWeight = () => Math.min(1, Math.abs(series().contrib[S.idx]) / S.item.scale);
 
 function strength(c) {
   const m = Math.abs(c) / S.item.scale;
@@ -115,15 +125,19 @@ function strength(c) {
 function updateView() {
   const s = series();
   $("#series").innerHTML = S.item.series
-    .map((x) => `<button type="button" role="tab" aria-selected="${x.slot === S.slot}" data-slot="${x.slot}">` +
-      `<span>${SHORT[x.slot]}<small>${SUB[x.slot]}</small></span><span class="n">${x.n}</span></button>`)
+    .map((x, k) => `<button type="button" role="tab" aria-selected="${x.slot === S.slot}" data-slot="${x.slot}" title="Key ${k + 1}">` +
+      `${SHORT[x.slot]}<small>${SUB[x.slot]}</small><span class="n">${x.n}</span></button>`)
     .join("");
+  const range = $("#slice-range");
+  range.max = s.n;
+  range.value = S.idx + 1;
+  $("#slice-out").textContent = `${S.idx + 1} / ${s.n}`;
   const c = s.contrib[S.idx];
-  const where = strength(c) === "almost no" ? "Almost no evidence on this slice."
-    : `${strength(c)[0].toUpperCase() + strength(c).slice(1)} push toward ${c > 0 ? "present" : "absent"}.`;
-  const best = S.slot === S.item.start.slot && S.idx === S.item.start.idx ? " This is the model's strongest-evidence slice." : "";
-  $("#slice-caption").innerHTML = `<strong>Slice ${S.idx + 1} of ${s.n}</strong><br>${where}${best}`;
-  $("#heat-toggle span").textContent = S.heat ? "Hide heat map" : "Show heat map";
+  const best = S.slot === S.item.start.slot && S.idx === S.item.start.idx;
+  const push = strength(c) === "almost no" ? "almost no evidence" : `${strength(c)} push toward ${c > 0 ? "present" : "absent"}`;
+  $("#hud-slice").textContent = `${SHORT[S.slot]} ${S.idx + 1}/${s.n} · ${push}${best ? " · strongest slice" : ""}`;
+  $("#heat-toggle").setAttribute("aria-pressed", String(S.heat));
+  $("#counter-toggle").setAttribute("aria-pressed", String(S.counter));
   drawStrip();
   loadImage();
 }
@@ -157,46 +171,202 @@ async function loadImage() {
   drawHeat();
 }
 
+// ---------------------------------------------------------------- highlight
+function sizeCanvas() {
+  const c = $("#heat"), box = $("#lightbox");
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(box.clientWidth * dpr);
+  c.height = Math.round(box.clientHeight * dpr);
+  return c;
+}
+
 function clearHeat() {
-  const c = $("#heat");
+  const c = sizeCanvas();
   c.getContext("2d").clearRect(0, 0, c.width, c.height);
 }
 
+function setLegend(kind) {
+  const noun = esc(S.item.noun);
+  const parts = [];
+  if (kind) {
+    parts.push(`<span class="sw present"></span>evidence for ${noun}`);
+    if (kind === "outline") parts.push(`<span class="sw ring"></span>strongest area`);
+    if (S.counter) parts.push(`<span class="sw absent"></span>evidence against`);
+  }
+  $("#hud-legend").innerHTML = parts.join(" &nbsp; ");
+}
+
 async function drawHeat() {
-  const c = $("#heat");
-  const box = c.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(box.width * dpr);
-  c.height = Math.round(box.height * dpr);
-  const g = c.getContext("2d");
-  g.clearRect(0, 0, c.width, c.height);
-  if (!S.heat || !S.item || !$("#slice").src || S.item.negligible) return;
+  clearHeat();
+  setLegend(null);
+  $("#hud-status").textContent = "";
+  const locate = $("#locate");
+  if (!S.item || !$("#slice").src) return;
+  if (!S.heat) { locate.textContent = "Highlight is off (press H)."; return; }
+  if (S.item.negligible) {
+    locate.textContent = "The model's call barely depends on any slice, so there is no area to highlight.";
+    return;
+  }
+  const weight = sliceWeight();
+  if (weight < 0.1) {
+    locate.innerHTML = "This slice barely affects the model's call. Press <kbd>G</kbd> for the strongest slice.";
+    return;
+  }
   const key = `${S.i}/${S.slot}/${S.idx}`;
+  if (S.fine[key]) return renderGrid(S.fine[key].grid, S.fine[key].n, weight, true);
+
+  // quick coarse map (4x4) while the fine map (8x8, re-encoded) is computed
   if (!S.regions[key]) S.regions[key] = (await api(`/api/region/${key}`)).data.grid;
-  if (key !== `${S.i}/${S.slot}/${S.idx}` || !S.heat) return; // moved on while loading
-  // 4x4 region evidence drawn at 4x4 and scaled up smoothly: red = toward present, blue = toward absent.
-  // Shape comes from this slice; overall strength follows how much the slice matters to the study.
-  const cells = S.regions[key];
+  if (key !== `${S.i}/${S.slot}/${S.idx}`) return; // moved on while loading
+  renderGrid(S.regions[key], 4, weight, false);
+  $("#hud-status").textContent = "Refining highlight…";
+  fetchFine(key, weight);
+}
+
+async function fetchFine(key, weight) {
+  for (let tries = 0; tries < 60; tries++) {
+    const { status, data } = await api(`/api/fine/${key}`);
+    if (status === 200) {
+      S.fine[key] = data;
+      if (key === `${S.i}/${S.slot}/${S.idx}` && S.heat) {
+        $("#hud-status").textContent = "";
+        renderGrid(data.grid, data.n, weight, true);
+      }
+      return;
+    }
+    if (key !== `${S.i}/${S.slot}/${S.idx}`) return;
+    await new Promise((r) => setTimeout(r, 2000)); // images still downloading
+  }
+}
+
+// bilinear upsampling of an n*n cell-centred grid to m*m, with a border of zeros so contours close
+function upsample(cells, n, m) {
+  const out = new Float32Array((m + 2) * (m + 2));
+  for (let y = 0; y < m; y++) {
+    for (let x = 0; x < m; x++) {
+      const u = Math.min(n - 1, Math.max(0, ((x + 0.5) / m) * n - 0.5));
+      const v = Math.min(n - 1, Math.max(0, ((y + 0.5) / m) * n - 0.5));
+      const x0 = Math.floor(u), y0 = Math.floor(v), x1 = Math.min(n - 1, x0 + 1), y1 = Math.min(n - 1, y0 + 1);
+      const fx = u - x0, fy = v - y0;
+      const val = cells[y0 * n + x0] * (1 - fx) * (1 - fy) + cells[y0 * n + x1] * fx * (1 - fy)
+        + cells[y1 * n + x0] * (1 - fx) * fy + cells[y1 * n + x1] * fx * fy;
+      out[(y + 1) * (m + 2) + (x + 1)] = val;
+    }
+  }
+  return out;
+}
+
+// marching squares: line segments where the field crosses thr, in padded-grid coordinates
+function contour(field, w, thr) {
+  const segs = [];
+  const at = (x, y) => field[y * w + x];
+  for (let y = 0; y < w - 1; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const a = at(x, y), b = at(x + 1, y), c = at(x + 1, y + 1), d = at(x, y + 1);
+      const k = (a > thr) * 8 + (b > thr) * 4 + (c > thr) * 2 + (d > thr);
+      if (k === 0 || k === 15) continue;
+      const t = (p, q) => (thr - p) / (q - p);
+      const T = [x + t(a, b), y], R = [x + 1, y + t(b, c)], B = [x + t(d, c), y + 1], L = [x, y + t(a, d)];
+      const table = { 1: [[L, B]], 2: [[B, R]], 3: [[L, R]], 4: [[T, R]], 5: [[L, T], [B, R]], 6: [[T, B]], 7: [[L, T]],
+        8: [[L, T]], 9: [[T, B]], 10: [[T, R], [L, B]], 11: [[T, R]], 12: [[L, R]], 13: [[B, R]], 14: [[L, B]] };
+      for (const [p, q] of table[k]) segs.push([p[0], p[1], q[0], q[1]]);
+    }
+  }
+  return segs;
+}
+
+function place(cx, cy) {
+  const h = cx < 0.36 ? "left" : cx > 0.64 ? "right" : "centre";
+  const v = cy < 0.36 ? "upper" : cy > 0.64 ? "lower" : "middle";
+  return v === "middle" && h === "centre" ? "centre" : v === "middle" ? `middle ${h}` : h === "centre" ? `${v} centre` : `${v} ${h}`;
+}
+
+function renderGrid(cells, n, weight, fine) {
+  const c = sizeCanvas(), g = c.getContext("2d"), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
   const peak = Math.max(...cells.map(Math.abs)) || 1;
-  const weight = Math.min(1, Math.abs(series().contrib[S.idx]) / S.item.scale);
-  if (weight < 0.1) return; // this slice doesn't matter to the prediction: nothing honest to show
+  const posPeak = Math.max(0, ...cells);
+  const negPeak = Math.max(0, ...cells.map((v) => -v));
+
+  // 1. soft heat layer: red toward present, blue (optional) toward absent
   const off = document.createElement("canvas");
-  off.width = off.height = 4;
-  const px = off.getContext("2d").createImageData(4, 4);
+  off.width = off.height = n;
+  const px = off.getContext("2d").createImageData(n, n);
   cells.forEach((v, k) => {
     const a = Math.abs(v) / peak;
-    const [r, gg, b] = v > 0 ? [230, 103, 103] : [57, 135, 229];
-    px.data.set([r, gg, b, Math.round(255 * 0.55 * weight * (a < 0.15 ? 0 : a))], k * 4);
+    if (v < 0 && !S.counter) return;
+    const [r, gg, b] = v > 0 ? RED : BLUE;
+    px.data.set([r, gg, b, Math.round(255 * S.alpha * Math.max(0.35, weight) * (a < 0.2 ? 0 : Math.pow(a, 1.2)))], k * 4);
   });
   off.getContext("2d").putImageData(px, 0, 0);
   g.imageSmoothingEnabled = true;
   g.imageSmoothingQuality = "high";
-  g.drawImage(off, 0, 0, 4, 4, 0, 0, c.width, c.height);
+  g.drawImage(off, 0, 0, n, n, 0, 0, W, H);
+
+  // 2. outline around the strongest area (fine map only: the coarse 4x4 cells are too blunt to outline)
+  const M = 64, w = M + 2, dpr = window.devicePixelRatio || 1;
+  const toPx = (x, y) => [((x - 0.5) / M) * W, ((y - 0.5) / M) * H];
+  const drawOutline = (field, thr, rgb, dashed) => {
+    const segs = contour(field, w, thr);
+    if (!segs.length) return null;
+    for (const [lw, col] of [[5 * dpr, "rgba(0,0,0,0.75)"], [2.4 * dpr, `rgb(${rgb.join(",")})`]]) {
+      g.beginPath();
+      g.setLineDash(dashed ? [6 * dpr, 5 * dpr] : []);
+      for (const [x1, y1, x2, y2] of segs) {
+        const [ax, ay] = toPx(x1, y1), [bx, by] = toPx(x2, y2);
+        g.moveTo(ax, ay);
+        g.lineTo(bx, by);
+      }
+      g.lineWidth = lw;
+      g.lineCap = "round";
+      g.strokeStyle = col;
+      g.stroke();
+    }
+    g.setLineDash([]);
+    return segs;
+  };
+
+  const locate = $("#locate");
+  const noun = esc(S.item.noun);
+  if (!fine || posPeak < 0.2 * peak || posPeak < 0.01) {
+    setLegend("heat");
+    if (!fine) locate.textContent = "Showing the quick map; the sharper highlight follows in a moment.";
+    else locate.innerHTML = `On this slice the image mostly argues <strong>against</strong> ${noun}${S.counter ? " (blue)" : " (press C to see where)"}.`;
+    return;
+  }
+  const pos = upsample(cells.map((v) => Math.max(0, v)), n, M);
+  const thr = 0.5 * posPeak;
+  const segs = drawOutline(pos, thr, RED, false);
+  if (S.counter && negPeak >= 0.2 * peak) drawOutline(upsample(cells.map((v) => Math.max(0, -v)), n, M), 0.5 * negPeak, BLUE, true);
+
+  // where the outlined area sits, and a tag above it
+  let sx = 0, sy = 0, sw = 0, minx = Infinity, miny = Infinity;
+  for (let y = 1; y <= M; y++) {
+    for (let x = 1; x <= M; x++) {
+      const v = pos[y * w + x];
+      if (v > thr) { sx += x * v; sy += y * v; sw += v; minx = Math.min(minx, x); miny = Math.min(miny, y); }
+    }
+  }
+  if (segs && sw > 0) {
+    const where = place((sx / sw - 0.5) / M, (sy / sw - 0.5) / M);
+    locate.innerHTML = `Red outline: where the model's evidence for <strong>${noun}</strong> sits on this slice (${where} of the image). It explains the model, it is not a diagnosis.`;
+    const [tx, ty] = toPx(minx, miny);
+    const label = `evidence for ${S.item.noun}`;
+    g.font = `700 ${12 * dpr}px "Atkinson Hyperlegible", system-ui, sans-serif`;
+    const tw = g.measureText(label).width + 10 * dpr, th = 18 * dpr;
+    const bx = Math.min(W - tw - 4, Math.max(4, tx)), by = Math.max(4, ty - th - 6 * dpr);
+    g.fillStyle = "rgba(0,0,0,0.72)";
+    g.fillRect(bx, by, tw, th);
+    g.fillStyle = `rgb(${RED.join(",")})`;
+    g.fillText(label, bx + 5 * dpr, by + 13 * dpr);
+  }
+  setLegend("outline");
 }
 
+// ---------------------------------------------------------------- strip
 function drawStrip() {
   const svg = $("#strip");
-  const W = svg.clientWidth, H = 80, top = 16, mid = top + (H - top) / 2, half = (H - top) / 2 - 3;
+  const W = svg.clientWidth, H = 60, top = 14, mid = top + (H - top) / 2, half = (H - top) / 2 - 3;
   const all = S.item.series, gap = 14;
   const total = all.reduce((a, s) => a + s.n, 0);
   const bw = (W - gap * (all.length - 1)) / total;
@@ -233,6 +403,40 @@ function stepSeries(d) {
   setSlice(slots[(slots.indexOf(S.slot) + d + slots.length) % slots.length]);
 }
 
+const strongest = () => setSlice(S.item.start.slot, S.item.start.idx);
+
+// ---------------------------------------------------------------- zoom, pan, brightness
+function applyView() {
+  const lb = $("#lightbox");
+  const maxPan = ((S.zoom - 1) * lb.clientWidth) / 2;
+  S.pan.x = Math.max(-maxPan, Math.min(maxPan, S.pan.x));
+  S.pan.y = Math.max(-maxPan, Math.min(maxPan, S.pan.y));
+  $("#zoomer").style.transform = `translate(${S.pan.x}px, ${S.pan.y}px) scale(${S.zoom})`;
+  $("#slice").style.filter = `brightness(${S.bright}) contrast(${S.contrast})`;
+  lb.classList.toggle("zoomed", S.zoom > 1.001);
+  $("#hud-zoom").textContent = S.zoom > 1.001 ? `${Math.round(S.zoom * 100)}%` : "";
+}
+
+function zoomBy(f, cx = 0, cy = 0) { // cx, cy: pointer offset from the image centre, in screen pixels
+  const z = Math.max(1, Math.min(6, S.zoom * f));
+  S.pan.x = cx - ((cx - S.pan.x) * z) / S.zoom;
+  S.pan.y = cy - ((cy - S.pan.y) * z) / S.zoom;
+  S.zoom = z;
+  if (z === 1) S.pan = { x: 0, y: 0 };
+  applyView();
+}
+
+function resetView(redraw = true) {
+  S.zoom = 1;
+  S.pan = { x: 0, y: 0 };
+  S.bright = 1;
+  S.contrast = 1;
+  $("#bright").value = 1;
+  $("#contrast").value = 1;
+  applyView();
+  if (redraw && S.item) drawHeat();
+}
+
 // ---------------------------------------------------------------- decisions
 async function decide(kind) {
   if (!S.item) return;
@@ -261,6 +465,12 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
 }
 
+function toggleHelp(show) {
+  const h = $("#help");
+  h.hidden = show === undefined ? !h.hidden : !show;
+  $("#help-toggle").setAttribute("aria-expanded", String(!h.hidden));
+}
+
 // ---------------------------------------------------------------- input
 function bind() {
   $("#queue-form").addEventListener("submit", async (e) => {
@@ -277,8 +487,20 @@ function bind() {
   for (const k of ["accept", "deny", "unsure"]) $(`#${k}`).addEventListener("click", () => decide(k));
   $("#skip").addEventListener("click", () => go(S.i + 1));
   $("#back").addEventListener("click", () => go(S.i - 1));
+  $("#strongest").addEventListener("click", strongest);
   $("#heat-toggle").addEventListener("click", () => { S.heat = !S.heat; updateView(); });
+  $("#counter-toggle").addEventListener("click", () => { S.counter = !S.counter; updateView(); });
+  $("#alpha").addEventListener("input", (e) => { S.alpha = Number(e.target.value); drawHeat(); });
+  $("#bright").addEventListener("input", (e) => { S.bright = Number(e.target.value); applyView(); });
+  $("#contrast").addEventListener("input", (e) => { S.contrast = Number(e.target.value); applyView(); });
+  $("#zoom-in").addEventListener("click", () => zoomBy(1.25));
+  $("#zoom-out").addEventListener("click", () => zoomBy(0.8));
+  $("#view-reset").addEventListener("click", () => resetView());
+  $("#slice-range").addEventListener("input", (e) => setSlice(S.slot, Number(e.target.value) - 1));
   $("#lang-toggle").addEventListener("click", () => { S.original = !S.original; renderReport(); });
+  $("#help-toggle").addEventListener("click", () => toggleHelp());
+  $("#help-close").addEventListener("click", () => toggleHelp(false));
+  $("#help").addEventListener("click", (e) => { if (e.target.id === "help") toggleHelp(false); });
   $("#series").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-slot]");
     if (b) setSlice(b.dataset.slot);
@@ -301,32 +523,61 @@ function bind() {
   });
   svg.addEventListener("mouseleave", () => { tip.hidden = true; });
 
-  let wheel = 0; // scroll on the image moves through slices, like a PACS viewer
+  // scroll moves through slices like a PACS viewer; pinch or ctrl+scroll zooms around the pointer
+  const lb = $("#lightbox");
+  let wheel = 0;
   $("#stage").addEventListener("wheel", (e) => {
     if (!S.item) return;
     e.preventDefault();
+    if (e.ctrlKey) {
+      const b = lb.getBoundingClientRect();
+      zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX - b.left - b.width / 2, e.clientY - b.top - b.height / 2);
+      return;
+    }
     wheel += e.deltaY;
     if (Math.abs(wheel) >= 40) {
       setSlice(S.slot, S.idx + Math.sign(wheel));
       wheel = 0;
     }
   }, { passive: false });
+  let drag = null;
+  lb.addEventListener("pointerdown", (e) => {
+    if (S.zoom <= 1.001) return;
+    drag = { x: e.clientX, y: e.clientY, px: S.pan.x, py: S.pan.y };
+    lb.setPointerCapture(e.pointerId);
+    lb.classList.add("panning");
+  });
+  lb.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    S.pan.x = drag.px + e.clientX - drag.x;
+    S.pan.y = drag.py + e.clientY - drag.y;
+    applyView();
+  });
+  const endDrag = () => { drag = null; lb.classList.remove("panning"); };
+  lb.addEventListener("pointerup", endDrag);
+  lb.addEventListener("pointercancel", endDrag);
+  lb.addEventListener("dblclick", () => resetView());
 
   document.addEventListener("keydown", (e) => {
-    if (e.target.closest("select, input, textarea") || e.metaKey || e.ctrlKey || e.altKey || !S.item) return;
+    if (e.target.closest("select, input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape") return toggleHelp(false);
+    if (e.key === "?") { e.preventDefault(); return toggleHelp(); }
+    if (!S.item) return;
     const k = e.key.toLowerCase();
     const actions = {
       a: () => decide("accept"), d: () => decide("deny"), u: () => decide("unsure"),
-      s: () => go(S.i + 1), b: () => go(S.i - 1),
+      s: () => go(S.i + 1), b: () => go(S.i - 1), g: strongest,
       h: () => { S.heat = !S.heat; updateView(); },
+      c: () => { S.counter = !S.counter; updateView(); },
       o: () => { if (!$("#lang-toggle").hidden) { S.original = !S.original; renderReport(); } },
       arrowleft: () => setSlice(S.slot, S.idx - 1), arrowright: () => setSlice(S.slot, S.idx + 1),
       arrowup: () => stepSeries(-1), arrowdown: () => stepSeries(1),
+      "+": () => zoomBy(1.25), "=": () => zoomBy(1.25), "-": () => zoomBy(0.8), "0": () => resetView(),
     };
     if (/^[1-4]$/.test(k) && S.item.series[Number(k) - 1]) actions[k] = () => setSlice(S.item.series[Number(k) - 1].slot);
     if (actions[k]) { e.preventDefault(); actions[k](); }
   });
-  window.addEventListener("resize", () => { if (S.item) { drawStrip(); drawHeat(); } });
+  window.addEventListener("resize", () => { if (S.item) { drawStrip(); applyView(); drawHeat(); } });
 }
 
 (async function init() {
