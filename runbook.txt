@@ -17,6 +17,10 @@ START HERE: launchers in start/ (double-click in Finder, or run them in a termin
                                        closing the window stops watching, not training.
   start/4_allow_lid_closed.command     let training run with the lid closed: switches macOS sleep off (your password)
                                        until the running queue ends, then back on. Desk only, ideally plugged in.
+  start/5_test_real_scan.command       test on a real scan: the submission model on a knee MRI from outside the
+                                       competition (DICOM download in "external scan/dicom/"). Opens a report with the
+                                       12 scores, percentiles vs the training knees, the strongest slice per finding
+                                       and the series it picked (--slot overrides). Not part of the submission.
 
 1. EXPERIMENTS (the head trained on cached features, 5 folds, fixed seed)
 ------------------------------------------------------------------------

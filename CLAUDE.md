@@ -41,6 +41,7 @@ When proposing work, say which of S1–S4 it serves. If it serves none, question
 - `docs/` — hand-written knowledge (keep it current).
 - `reference/code/` — cloned lumbar solutions, git-ignored and about 220 MB. Re-clone the list in `reference/STUDY.md` if missing. `reference/nb2py.py` converts notebooks to greppable `.nb.py`.
 - `.venv/` — Python with `kaggle`, `nbformat`, `pypdf`. Kaggle credentials are in `~/.kaggle/kaggle.json` (never print them).
+- `external scan/` — one real, identifiable patient's knee MRI (DICOM from a hospital viewer), used only to test the model with `scripts/external_study.py` (`start/5_test_real_scan.command`). Git-ignored. Never read its images, `results/report.html` or `truth.csv` in a Claude session, Not part of the submission: keep it out of any heads packaged for Kaggle (external data must be free and public).
 
 ## Environment
 - MacBook M3, 16 GB. Heavy work runs on Kaggle notebooks, or a rented GPU if needed.
