@@ -2,6 +2,7 @@
 
     python scripts/review.py            # opens http://127.0.0.1:8765 (local only)
     python scripts/review.py --demo     # synthetic data, to try the controls
+    python scripts/review.py --external "external scan"   # a real-world scan (scripts/external_study.py), port 8766
 
 Each item shows the slice with the model's strongest evidence (large), a heat map of where on that slice the
 evidence sits, an evidence strip across every slice of every series (up = toward present, down = toward absent),
@@ -88,9 +89,14 @@ def verdict(p):
 
 
 def consequences(label, model_p, label_p):
+    """label_p None: no training label (a real-world scan), so the choice only says whether the model is right."""
     noun = QUESTIONS[label][1]
-    m, l = verdict(model_p), verdict(label_p)
+    m = verdict(model_p)
     state = lambda t: "present" if t else "absent"  # noqa: E731
+    if label_p is None:
+        return {"accept": {"title": f"Accept: {noun} {state(m)}", "truth": int(m), "detail": "The model is right."},
+                "deny": {"title": f"Deny: {noun} {state(not m)}", "truth": int(not m), "detail": "The model is wrong."}}
+    l = verdict(label_p)
     return {
         "accept": {"title": f"Accept: {noun} {state(m)}", "truth": int(m),
                    "detail": "The model is right. The training label is wrong." if m != l
@@ -432,6 +438,89 @@ class DemoSource:
         return len(set(studies))
 
 
+# ---------------------------------------------------------------- a real-world scan (scripts/external_study.py)
+class MeanHead(torch.nn.Module):
+    """Several heads as one module: their mean logit. Occlusion differences are linear in it, so the region maps
+    average over the heads the same way the slice evidence does."""
+
+    def __init__(self, heads):
+        super().__init__()
+        self.heads = torch.nn.ModuleList(heads)
+
+    def forward(self, x, slot, depth, pad):
+        return torch.stack([h(x, slot, depth, pad) for h in self.heads]).mean(0)
+
+
+class ExternalSource(RealSource):
+    """One scan from outside the competition, prepared by scripts/external_study.py (<folder>/results/study.npz):
+    12 items, one per finding, most unusual first. There is no training label or report text; the truth is what Max
+    entered in <folder>/truth.csv from the radiologist's report. Scores and slice evidence come from the report run (all
+    heads). Region maps use RealSource's code over one head in five (21 of the packaged 105), about 2 s per fine map
+    instead of 8.
+    Every item stays in the queue, so the scan can be reopened any time; grades go to <folder>/results/reviews.csv."""
+
+    def __init__(self, folder):
+        from external_study import load_heads  # imported here: external_study imports this module
+        res = folder / "results"
+        if not (res / "study.npz").exists():
+            sys.exit(f'nothing prepared in {res}. Run first: python scripts/external_study.py "{folder}"')
+        meta = json.loads((res / "study.json").read_text())
+        z = np.load(res / "study.npz")
+        heads, self.cfg, self._pca, _ = load_heads(Path(meta["heads"]))
+        assert self.cfg["labels"] == LABELS, self.cfg["labels"]
+        self.folder, self.uid, self.run = folder, folder.name, Path(folder.name)
+        self.head = MeanHead(heads[::max(1, len(heads) // 20)]).eval()
+        self.prob, self.ev = z["prob"], z["evidence"]
+        self.percentile = pd.read_csv(res / "predictions.csv").set_index("finding").percentile
+        self.stacks = {self.uid: {s: z[f"stack_{s}"] for s in meta["slots"]}}
+        rows = [{"slot": s, "length": len(self.stacks[self.uid][s])} for s in meta["slots"]]
+        self._tokens = {self.uid: (torch.from_numpy(z["tokens"]).float()[None], torch.from_numpy(z["slot"]).long()[None],
+                                   torch.from_numpy(z["depth"]).float()[None], rows)}
+        self.lock, self.enc_lock, self._enc = threading.Lock(), threading.Lock(), None
+        threading.Thread(target=lambda: self.enc_lock.acquire() and (self.encoder(), self.enc_lock.release()),
+                         daemon=True).start()  # load the encoder now, not on the first fine map
+        t = pd.read_csv(folder / "truth.csv", dtype=str) if (folder / "truth.csv").exists() else None
+        self.truth = {} if t is None else {r.finding: int(r.present) for r in t.itertuples()
+                                           if str(r.present).strip() in {"0", "1"}}
+
+    def queue(self, mode, label, n, seed=0):
+        q = pd.DataFrame([{"study": self.uid, "fold": 0, "label": l, "model_prob": float(self.prob[k]),
+                           "report_score": np.nan, "gold": self.truth.get(l), "gap": 0.0}
+                          for k, l in enumerate(LABELS) if not label or l == label])
+        q["order"] = q.label.map(self.percentile)
+        return q.sort_values("order", ascending=False).drop(columns="order").head(n).reset_index(drop=True)
+
+    def model(self, fold):
+        return self.head
+
+    def tokens(self, u):
+        return self._tokens[u]
+
+    def explain(self, u, fold, label):
+        k, series, pos = LABELS.index(label), [], 0
+        for r in self._tokens[u][3]:
+            series.append({"slot": r["slot"], "title": SLOT_TITLES[r["slot"]], "n": r["length"],
+                           "contrib": self.ev[pos:pos + r["length"], k].round(5).tolist()})
+            pos += r["length"]
+        return float(self.prob[k]), series
+
+    def encoder(self):
+        if self._enc is None:
+            from knee.features import load_encoder
+            torch.set_num_threads(4)
+            self._enc = load_encoder("cpu", half=False)
+        return self._enc
+
+    def report(self, u):
+        return [], False
+
+    def stack(self, u):
+        return self.stacks.get(u)
+
+    def ready(self, studies):
+        return len(set(studies))
+
+
 # ---------------------------------------------------------------- app state
 class App:
     def __init__(self, source, reviews_path, n):
@@ -450,7 +539,7 @@ class App:
         q = self.q
         items = [] if q.empty else [{"i": i, "label": r.label, "decision": self.decisions.get(i)} for i, r in enumerate(q.itertuples())]
         first = next((it["i"] for it in items if it["decision"] is None), len(items))
-        return {"run": self.src.run.name, "mode": self.mode, "label": self.label, "labels": LABELS, "items": items,
+        return {"run": self.src.run.name, "external": isinstance(self.src, ExternalSource), "mode": self.mode, "label": self.label, "labels": LABELS, "items": items,
                 "first_open": first, "tally": self.tally(), "ready": self.src.ready(q.study) if len(q) else 0,
                 "studies": int(q.study.nunique()) if len(q) else 0}
 
@@ -469,14 +558,15 @@ class App:
         flat = [(s["slot"], k, abs(c)) for s in series for k, c in enumerate(s["contrib"])]
         top = max(flat, key=lambda t: t[2])
         pairs, translated = self.src.report(r.study)
+        rep = None if pd.isna(r.report_score) else float(r.report_score)
         out = {"i": i, "n": len(self.q), "study_short": r.study[-10:], "label": r.label,
                "question": QUESTIONS[r.label][0], "noun": QUESTIONS[r.label][1],
-               "model": prob, "report_label": float(r.report_score), "gold": None if pd.isna(r.gold) else int(r.gold),
+               "model": prob, "report_label": rep, "gold": None if pd.isna(r.gold) else int(r.gold),
                "series": series, "start": {"slot": top[0], "idx": top[1]},
                "scale": max(max((t[2] for t in flat), default=0.0), NOTICEABLE),
                "negligible": max((t[2] for t in flat), default=0.0) < NOTICEABLE,
                "summary": summarise(prob, series), "report": report_view(r.label, pairs, translated),
-               "choices": consequences(r.label, prob, float(r.report_score)), "decision": self.decisions.get(i)}
+               "choices": consequences(r.label, prob, rep), "decision": self.decisions.get(i)}
         self.cache[i] = out
         return out
 
@@ -504,15 +594,15 @@ class App:
 
     def decide(self, i, decision):
         it, r = self.item(i), self.q.iloc[i]
-        m, l = verdict(it["model"]), verdict(it["report_label"])
+        m, rep = verdict(it["model"]), it["report_label"]
         truth = it["choices"][decision]["truth"] if decision in ("accept", "deny") else None
-        label_wrong = int(truth is not None and truth != l)
+        label_wrong = int(truth is not None and rep is not None and truth != verdict(rep))
         model_wrong = int(truth is not None and truth != m)
         row = {"reviewed_at": datetime.now().isoformat(timespec="seconds"), "run": self.src.run.name,
                "StudyInstanceUID": r.study, "fold": int(r.fold), "label": r.label, "model_prob": round(it["model"], 4),
-               "report_score": round(it["report_label"], 4), "gold": "" if it["gold"] is None else it["gold"],
+               "report_score": "" if rep is None else round(rep, 4), "gold": "" if it["gold"] is None else it["gold"],
                "decision": decision, "truth": "" if truth is None else truth, "model_right": "" if truth is None else 1 - model_wrong,
-               "label_right": "" if truth is None else 1 - label_wrong,
+               "label_right": "" if truth is None or rep is None else 1 - label_wrong,
                "strongest_slot": it["start"]["slot"], "strongest_slice": it["start"]["idx"],
                "translated": int(it["report"]["translated"])}
         with self.lock:
@@ -593,18 +683,23 @@ def main():
     p.add_argument("--feats", help="feature cache (default: the one the run was trained on, from its config.json)")
     p.add_argument("--labels", default=str(ROOT / "data/labeller/all-v2/report_scores_all.csv"))
     p.add_argument("--n", type=int, default=50, help="queue length")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, help="default 8765, or 8766 with --external (both can run at once)")
     p.add_argument("--demo", action="store_true", help="synthetic data, to try the controls")
+    p.add_argument("--external", type=Path, help='a real-world scan prepared by scripts/external_study.py ("external scan")')
     p.add_argument("--no-browser", action="store_true")
     args = p.parse_args()
     if args.demo:
         app = App(DemoSource(), ROOT / "runs/demo_reviews.csv", args.n)
+    elif args.external:
+        folder = args.external.resolve()
+        app = App(ExternalSource(folder), folder / "results/reviews.csv", args.n)
     else:
         run = Path(args.run) if args.run else latest_run()
         feats = args.feats or str(ROOT / json.loads((run / "config.json").read_text())["feats"])
         app = App(RealSource(run, feats, args.labels), REVIEWS, args.n)
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
-    url = f"http://127.0.0.1:{args.port}"
+    port = args.port or (8766 if args.external else 8765)
+    srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    url = f"http://127.0.0.1:{port}"
     print(f"review tool on {url} (run {app.src.run.name}, {len(app.q)} items). Ctrl+C to stop.", flush=True)
     if not args.no_browser:
         webbrowser.open(url)

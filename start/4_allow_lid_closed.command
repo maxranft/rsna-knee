@@ -26,12 +26,11 @@ fi
 echo
 echo "Switching sleep off until that queue ends. macOS will ask for your password."
 sudo -v || exit 1
-sudo nohup sh -c "pmset -a disablesleep 1; while kill -0 $QPID 2>/dev/null; do sleep 60; done; pmset -a disablesleep 0" \
-  > /dev/null 2>&1 &
+sudo nohup "$PWD/scripts/keep_awake.sh" "$QPID" > /dev/null 2>&1 &  # shared with start/6_run_project_external.command
 sleep 2
 if pmset -g | grep -q "SleepDisabled[[:space:]]*1"; then
   echo "Sleep is off. You can close the lid now; training continues."
-  echo "Sleep switches back on by itself when the queue ends (or now with: sudo pmset -a disablesleep 0)."
+  echo "Sleep switches back on by itself when the queue ends and nothing else needs it off (or now with: sudo pmset -a disablesleep 0)."
 else
   echo "Could not confirm sleep is off; check with: pmset -g | grep SleepDisabled"
 fi

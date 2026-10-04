@@ -4,10 +4,15 @@ viewer. A test only: nothing here trains anything.
     python scripts/external_study.py "external scan"                      # the packaged submission model
     python scripts/external_study.py "external scan" --heads runs/<id>    # one run's 5 fold heads, or runs/ens-<id>
     python scripts/external_study.py "external scan" --slot sag_fs=5      # force a slot to series number 5 (or =none)
+    python scripts/external_study.py "external scan" --fov-mm 150         # picture exports: the field of view, if known
 
-Input: the study's DICOM files anywhere under <folder>/dicom/. Zips there are unpacked first, and files need no .dcm
-suffix (viewer exports often have none). Output in <folder>/results/: report.html (opened in the browser),
-predictions.csv, series.csv.
+Input: the viewer's download anywhere under <folder>/dicom/. Zips there are unpacked first. DICOM files need no .dcm
+suffix (viewer exports often have none). A picture export (PNG/JPEG, one folder per series, e.g. 04_Sag_PD_FS/001.png)
+also works, approximately: see "Picture exports" below.
+
+Output in <folder>/results/: graphs/*.png (scripts/external_graphs.py, opened in Preview), report.html (written, not
+opened), predictions.csv, series.csv, and study.npz + study.json for the review tool (python scripts/review.py
+--external <folder>: the slices with the evidence highlight).
 
 The study goes through the same code as the Kaggle test set (preprocess.choose_series / load_volume / to_uint8, then
 features.encode, then Head), with one difference: the competition CSVs give each series' plane and fluid sensitivity
@@ -16,6 +21,12 @@ Plane comes from ImageOrientationPatient (agrees with the competition labels on 
 suppression comes from SeriesDescription (99.5% agreement where there is one, 85% from RepetitionTime alone). Check the
 slot thumbnails in the report and use --slot when a pick looks wrong.
 
+Picture exports carry no headers, so three things are assumed: the plane and fat suppression come from the folder name,
+the slices are in file-name order, and the pixel size comes from the field of view across the image's long side:
+--fov-mm, else the number in <folder>/fov_mm.txt, else 160 mm (the training median). The scores are sensitive to it
+(11% off moved them by up to 0.14 in a test), so read the real value off the viewer when possible. The contrast is the viewer's display window, not the scanner's values. The report says so; treat
+its scores as approximate and prefer a DICOM download when the viewer offers one.
+
 Evidence per finding is the review tool's slice occlusion, averaged over every head: the log-odds with every slice
 minus without that slice (positive = the slice pushed toward present). It explains the model, not the knee.
 
@@ -23,8 +34,8 @@ Optional <folder>/truth.csv (finding,present), created blank on the first run: f
 report to see the model next to the truth. One study gives no AUC, so read it as a sanity check.
 
 Not part of the submission: a personal check of the model on a real scan. One study would not move a model trained
-on 4,407, and heads trained with it could not go to Kaggle (external data must be free and public). Patient data stays on this machine: the terminal output has no patient identifiers or predictions, and the
-folder is git-ignored. Never paste the report page, the images or truth.csv into a chat.
+on 4,407, and heads trained with it could not go to Kaggle (external data must be free and public). Patient data
+stays on this machine: the terminal output has no patient identifiers or predictions, and the folder is git-ignored. Never paste the report page, the images or truth.csv into a chat.
 """
 import argparse
 import base64
@@ -33,9 +44,9 @@ import io
 import json
 import re
 import shutil
+import subprocess
 import sys
 import time
-import webbrowser
 import zipfile
 from collections import defaultdict
 from datetime import datetime
@@ -51,7 +62,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from knee.features import encode, load_encoder  # noqa: E402
 from knee.head import SLOT_NAMES, Head  # noqa: E402
-from knee.preprocess import choose_series, load_volume, to_uint8  # noqa: E402
+from knee.preprocess import SLOTS, _to_grid, choose_series, load_volume, to_uint8  # noqa: E402
 from review import NOTICEABLE, QUESTIONS, SLOT_TITLES  # noqa: E402
 
 PACKAGED = ROOT / "build/rsna-knee-heads"
@@ -59,6 +70,8 @@ ARCH = ("tokens", "dim", "d", "layers", "labels", "feats")
 NOT_DICOM = {".zip", ".exe", ".dll", ".htm", ".html", ".js", ".css", ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".bmp",
              ".xml", ".ini", ".inf", ".json", ".csv", ".md", ".npz", ".py"}
 PLANES = ["Sagittal", "Coronal", "Axial"]  # the patient axis the slice normal is closest to: x, y, z
+PICTURES = {".png", ".jpg", ".jpeg"}
+PLANE_WORDS = {"Sagittal": "sag", "Coronal": "cor", "Axial": "ax|tra"}  # picture exports: plane from the folder name
 LOCALIZER = re.compile(r"(?<![a-z])(loc|locali[sz]er|scout|survey|pilot|tri[ -]?pilot|3[ -]?pl(ane)?|cal|calibration)"
                        r"(?![a-z])", re.I)
 # fat suppression from SeriesDescription; rules and order as validated on data/survey/headers.csv
@@ -158,10 +171,56 @@ def link_series(series, work):
             (d / f"{i:05d}.dcm").symlink_to(f.resolve())
 
 
+def scan_pictures(root):
+    """A picture export (one folder of PNG/JPEG slices per series) -> series dicts like scan() returns. The folder name
+    ("04_Sag_PD_FS") gives the series number, the plane and fat suppression."""
+    groups = defaultdict(list)
+    for f in sorted(root.rglob("*")):
+        if f.is_file() and f.suffix.lower() in PICTURES and not f.name.startswith("."):
+            groups[f.parent].append(f)
+    series = []
+    for d, files in groups.items():
+        m = re.match(r"(\d+)[ _-]*(.*)", d.name)
+        num, desc = (int(m[1]), m[2]) if m else (0, d.name)
+        plane = next((p for p, rx in PLANE_WORDS.items() if re.search(rf"(?<![a-z])({rx})", desc.lower())), None)
+        fs, rule = fat_suppressed({"SeriesDescription": desc})
+        skip = ("localizer" if LOCALIZER.search(desc) else "no plane in the folder name" if plane is None
+                else f"only {len(files)} images" if len(files) < 6 else "")
+        files = sorted(files, key=lambda f: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", f.name)])
+        series.append({"StudyInstanceUID": "pictures", "SeriesInstanceUID": str(d), "SeriesNumber": num,
+                       "SeriesDescription": desc, "Anatomical_Plane": plane or "unknown", "Fluid_Sensitive": fs,
+                       "fs_rule": rule, "images": len(files), "skip": skip, "files": files})
+    return sorted(series, key=lambda s: s["SeriesNumber"])
+
+
+def load_pictures(files, fov_mm):
+    """Picture slices -> float32 [D, H, W] on the training grid, with square pixels of fov_mm / long side."""
+    slices = [np.asarray(Image.open(f).convert("L"), np.float32) for f in files]
+    ps = fov_mm / max(slices[0].shape)
+    return np.stack([_to_grid(a, (ps, ps)) for a in slices])
+
+
+def choose_pictures(series):
+    """choose_series' rule without headers: prefer 15-60 slices, then more slices, then the lower series number."""
+    chosen = {}
+    for name, prefs in SLOTS:
+        for plane, fs in prefs:
+            cands = [s for s in series if s["Anatomical_Plane"] == plane and s["Fluid_Sensitive"] == fs]
+            if cands:
+                chosen[name] = min(cands, key=lambda s: (not 15 <= s["images"] <= 60, -s["images"], s["SeriesNumber"]))
+                break
+    return chosen
+
+
 def pick_slots(series, work, overrides):
-    """{slot: series dict}: choose_series over the usable series, then the --slot overrides (by SeriesNumber)."""
-    by_uid = {s["SeriesInstanceUID"]: s for s in series}
-    chosen = {k: by_uid[u] for k, u in choose_series([s for s in series if not s["skip"]], work).items()}
+    """{slot: series dict}: choose_series over the usable series (choose_pictures when work is None), then the --slot
+    overrides (by SeriesNumber)."""
+    usable = [s for s in series if not s["skip"]]
+    if work is None:
+        chosen = choose_pictures(usable)
+    else:
+        by_uid = {s["SeriesInstanceUID"]: s for s in series}
+        chosen = {k: by_uid[u] for k, u in choose_series(usable, work).items()}
     for slot, num in overrides.items():
         if num == "none":
             chosen.pop(slot, None)
@@ -368,12 +427,17 @@ def main():
     ap.add_argument("folder", type=Path, help='e.g. "external scan"; the DICOM download goes in <folder>/dicom/')
     ap.add_argument("--heads", type=Path, default=PACKAGED, help="default: the packaged submission model")
     ap.add_argument("--slot", action="append", default=[], metavar="SLOT=SERIES_NUMBER")
+    ap.add_argument("--fov-mm", type=float, help="picture exports: field of view across the long side (default: "
+                    "<folder>/fov_mm.txt, else 160)")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--no-open", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
     folder = args.folder if args.folder.is_absolute() else Path.cwd() / args.folder
     dicom_dir, out = folder / "dicom", folder / "results"
+    if args.fov_mm is None:
+        f = folder / "fov_mm.txt"
+        args.fov_mm = float(f.read_text().split()[0]) if f.exists() else 160.0
     overrides = dict(s.split("=", 1) for s in args.slot)
     if bad := set(overrides) - set(SLOT_NAMES):
         sys.exit(f"unknown slot {bad}; slots are {SLOT_NAMES}")
@@ -382,30 +446,36 @@ def main():
 
     unpack(dicom_dir)
     series = scan(dicom_dir)
+    pictures = not series
+    if pictures:
+        series = scan_pictures(dicom_dir)
     if not series:
-        pics = sum(1 for p in dicom_dir.rglob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
-        sys.exit(f"no MR DICOM files under {dicom_dir}." + (f" Found {pics} JPEG/PNG images: the model needs the DICOM "
-                 "download (slice positions and pixel spacing), not picture exports." if pics else
-                 " Download the study from the viewer as DICOM and put the zip or folder there."))
+        sys.exit(f"no MR DICOM files or picture folders under {dicom_dir}. Download the study from the viewer (DICOM "
+                 "if offered) and put the zip or folder there.")
     studies = pd.Series([s["StudyInstanceUID"] for s in series if not s["skip"]]).value_counts()
     if len(studies) > 1:
         print(f"{len(studies)} MR studies in the download; using the one with the most series ({studies.iloc[0]})")
     series = [s for s in series if s["StudyInstanceUID"] == (studies.index[0] if len(studies) else series[0]["StudyInstanceUID"])]
     skipped = [s for s in series if s["skip"]]
-    print(f"{sum(len(s['files']) for s in series)} DICOM files, {len(series)} MR series"
+    if pictures:
+        print(f"no DICOM: using the picture export (approximate: {args.fov_mm:g} mm field of view assumed, display "
+              "contrast)", flush=True)
+    print(f"{sum(len(s['files']) for s in series)} {'picture' if pictures else 'DICOM'} files, {len(series)} MR series"
           + (f" ({len(skipped)} skipped: {', '.join(sorted({s['skip'] for s in skipped}))})" if skipped else ""), flush=True)
 
-    work = out / "_series"
-    link_series(series, work)
+    work = None if pictures else out / "_series"
+    if work:
+        link_series(series, work)
     slots = pick_slots(series, work, overrides)
     if not slots:
         sys.exit("no usable series for any slot; see the series list with --slot to force one")
     arrays = {}
     for name, s in slots.items():
-        vol, _ = load_volume(work / s["SeriesInstanceUID"])
+        vol = load_pictures(s["files"], args.fov_mm) if pictures else load_volume(work / s["SeriesInstanceUID"])[0]
         arrays[name] = to_uint8(vol)
         print(f"  {name:6s} = series {s['SeriesNumber']} '{s['SeriesDescription']}' ({len(arrays[name])} slices)", flush=True)
-    shutil.rmtree(work)
+    if work:
+        shutil.rmtree(work)
 
     heads, cfg, pca, runs = load_heads(args.heads)
     labels = cfg["labels"]
@@ -441,19 +511,35 @@ def main():
                       "top_evidence": None if top is None else float(e[top]),
                       "strip": strip_svg(e, bounds, scale, top)})
     pd.DataFrame([{k: v for k, v in r.items() if k != "strip"} for r in preds]).to_csv(out / "predictions.csv", index=False)
+    # everything the review tool's --external mode shows, so it opens without re-reading the DICOM
+    source = args.heads.resolve()
+    model = (f"{len(heads)} heads from {len(runs)} training run{'s' * (len(runs) > 1)} "
+             f"({source.relative_to(ROOT) if source.is_relative_to(ROOT) else source})")
+    np.savez(out / "study.npz", tokens=x[0].numpy(), slot=slot[0].numpy(), depth=depth[0].numpy(), prob=prob, evidence=ev,
+             **({} if ref is None else {"reference": ref.values.astype(np.float32)}),
+             **{f"stack_{s}": arrays[s] for s in names})
+    (out / "study.json").write_text(json.dumps({
+        "heads": str(source), "model": model, "labels": labels, "slots": names,
+        "series": {k: {"number": s["SeriesNumber"], "description": s["SeriesDescription"]} for k, s in slots.items()},
+        "source": f"picture export, {args.fov_mm:g} mm field of view assumed" if pictures else "dicom",
+        "created": datetime.now().isoformat(timespec="seconds")}, indent=1))
     used = {s["SeriesInstanceUID"]: k for k, s in slots.items()}
     pd.DataFrame([{**{k: v for k, v in s.items() if k not in ("files", "StudyInstanceUID", "SeriesInstanceUID")},
                    "slot": used.get(s["SeriesInstanceUID"], "")} for s in series]).to_csv(out / "series.csv", index=False)
-    source = args.heads.resolve()
-    model_note = (f"{len(heads)} heads from {len(runs)} training run{'s' * (len(runs) > 1)} "
-                  f"({html.escape(str(source.relative_to(ROOT) if source.is_relative_to(ROOT) else source))})"
-                  + ("" if ref is None else f", percentiles against {len(ref):,} training knees"))
+    model_note = html.escape(model) + ("" if ref is None else f", percentiles against {len(ref):,} training knees")
     report = out / "report.html"
-    write_report(report, folder, preds, slots, arrays, series, model_note, truth_summary(preds))
-    print(f"report: {report.relative_to(Path.cwd()) if report.is_relative_to(Path.cwd()) else report} "
-          f"({time.time() - t0:.0f} s total)")
+    caveat = ("" if not pictures else
+              f'<p class="callout"><b>Approximate:</b> this is a picture export (PNG/JPEG), not DICOM. The pixel size is '
+              f'assumed from a {args.fov_mm:g} mm field of view (<code>--fov-mm</code>), plane and fat suppression come '
+              "from the folder names, and the contrast is the viewer's display window. Scores can shift from what the "
+              "DICOM would give; download the DICOM if the viewer offers it.</p>")
+    write_report(report, folder, preds, slots, arrays, series, model_note, caveat + truth_summary(preds))
+    from external_graphs import write_graphs  # imported here: plotting is only needed at the end
+    graphs = write_graphs(folder)
+    print(f"graphs: {graphs[0].parent.relative_to(Path.cwd()) if graphs[0].is_relative_to(Path.cwd()) else graphs[0].parent} "
+          f"(report page, not opened: {report.name}; {time.time() - t0:.0f} s total)")
     if not args.no_open:
-        webbrowser.open(report.as_uri())
+        subprocess.run(["open", *map(str, graphs)])
 
 
 if __name__ == "__main__":

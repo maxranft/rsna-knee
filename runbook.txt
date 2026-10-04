@@ -18,9 +18,15 @@ START HERE: launchers in start/ (double-click in Finder, or run them in a termin
   start/4_allow_lid_closed.command     let training run with the lid closed: switches macOS sleep off (your password)
                                        until the running queue ends, then back on. Desk only, ideally plugged in.
   start/5_test_real_scan.command       test on a real scan: the submission model on a knee MRI from outside the
-                                       competition (DICOM download in "external scan/dicom/"). Opens a report with the
-                                       12 scores, percentiles vs the training knees, the strongest slice per finding
-                                       and the series it picked (--slot overrides). Not part of the submission.
+                                       competition (DICOM download in "external scan/dicom/"). Opens 3 graphs: scores vs
+                                       the training knees, where the model looked, the strongest slices (redraw:
+                                       scripts/external_graphs.py). --slot overrides. Not part of the submission.
+  start/6_run_project_external.command     RUN PROJECT EXTERNAL ("run project external" to Claude): sleep off for the lid
+                                       (password; back on when done or after 3 h), results dashboard, the model
+                                       on "external scan" (3 graphs in Preview), and the scan in the grading window at
+                                       http://127.0.0.1:8766 (grades go to external scan/results/reviews.csv).
+                                       Takes a DICOM download, or (approximately) a PNG export with one folder
+                                       per series; then put the field of view in external scan/fov_mm.txt.
 
 1. EXPERIMENTS (the head trained on cached features, 5 folds, fixed seed)
 ------------------------------------------------------------------------

@@ -28,6 +28,11 @@ async function api(path, body) {
 // ---------------------------------------------------------------- session and navigation
 function applySession(s) {
   S.items = s.items;
+  S.external = s.external;
+  if (s.external) { // a real-world scan (review.py --external): one study, no worklist to pick
+    $("#queue-form").style.display = "none";
+    $(".brand").lastChild.textContent = `Knee MRI Review · ${s.run}`;
+  }
   const sel = $("#q-label");
   if (sel.options.length === 1) s.labels.forEach((l) => sel.add(new Option(l, l)));
   $("#q-mode").value = s.mode;
@@ -63,7 +68,8 @@ function nextOpen(after) {
 
 // ---------------------------------------------------------------- truth and verdict
 function truth(it) {
-  if (it.gold !== null) return { state: it.gold ? "present" : "absent", p: null, src: "Radiologist gold label", verified: true };
+  if (it.gold !== null) return { state: it.gold ? "present" : "absent", p: null, src: S.external ? "Radiologist, from truth.csv" : "Radiologist gold label", verified: true };
+  if (it.report_label === null) return { state: "unknown", p: null, src: "Fill in truth.csv from the radiologist's report", verified: false };
   return { state: stateOf(it.report_label), p: it.report_label, src: "Report label, not radiologist-checked", verified: false };
 }
 
@@ -74,7 +80,7 @@ function renderVerdict() {
     `<span class="slot"><span class="k">Actual</span><span class="chip ${t.state}">${t.state.toUpperCase()}</span><span class="src">${t.src}</span></span>` +
     `<span class="arrow" aria-hidden="true">→</span>` +
     `<span class="slot"><span class="k">Model prediction</span><span class="chip ${m}">${m.toUpperCase()} <span class="p">${pct(it.model)}</span></span></span>` +
-    `<span class="match ${agree ? "" : "no"}">${agree ? "Model matches" : "Model disagrees"}</span>`;
+    (t.state === "unknown" ? "" : `<span class="match ${agree ? "" : "no"}">${agree ? "Model matches" : "Model disagrees"}</span>`);
 }
 
 // ---------------------------------------------------------------- item panel
@@ -90,12 +96,15 @@ function renderItem() {
   $("#track-fill").style.width = `${(100 * S.items.filter((x) => x.decision).length) / Math.max(1, it.n)}%`;
   $("#finding").textContent = it.label;
   $("#question").textContent = it.question;
+  const goldName = S.external ? "Radiologist" : "Gold label";
   const gold = it.gold === null
-    ? `<tr><td class="n">Gold label</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state none">Not in set</span></td></tr>`
-    : `<tr><td class="n">Gold label</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state ${it.gold ? "present" : "absent"}">${it.gold ? "Present" : "Absent"}</span></td></tr>`;
-  $("#assess").innerHTML = meterRow("Model", it.model) + meterRow("Training label", it.report_label) + gold;
-  const agree = stateOf(it.model) === stateOf(it.report_label);
-  $("#agree").innerHTML = `Model and training label <strong>${agree ? "agree" : "disagree"}</strong>.`;
+    ? `<tr><td class="n">${goldName}</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state none">${S.external ? "Not filled in" : "Not in set"}</span></td></tr>`
+    : `<tr><td class="n">${goldName}</td><td class="b"></td><td class="v">–</td><td class="s"><span class="state ${it.gold ? "present" : "absent"}">${it.gold ? "Present" : "Absent"}</span></td></tr>`;
+  const hasLabel = it.report_label !== null;
+  $("#assess").innerHTML = meterRow("Model", it.model) + (hasLabel ? meterRow("Training label", it.report_label) : "") + gold;
+  const agree = hasLabel && stateOf(it.model) === stateOf(it.report_label);
+  $("#agree").innerHTML = hasLabel ? `Model and training label <strong>${agree ? "agree" : "disagree"}</strong>.`
+    : "A scan from outside the competition: no training label.";
   $("#summary").textContent = it.summary;
   $("#study-head").innerHTML = `<strong>Study</strong>…${esc(it.study_short)}<br>${it.series.length} series`;
   renderVerdict();
@@ -121,6 +130,12 @@ function showConsequence(kind) {
 
 function renderReport() {
   const r = S.item.report;
+  if (S.external) {
+    $("#hits").textContent = "No report text for this scan. Its truth comes from truth.csv.";
+    $("#lang-toggle").hidden = true;
+    $("#sentences").innerHTML = "";
+    return;
+  }
   const n = r.hits;
   const hits = $("#hits");
   hits.classList.toggle("none", n === 0);
