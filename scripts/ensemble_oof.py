@@ -26,10 +26,11 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("runs", nargs="+")
     p.add_argument("--log", default="")
+    p.add_argument("--tta", action="store_true", help="use each member's oof_tta_slot.csv (scripts/tta_oof.py) instead of oof.csv")
     args = p.parse_args()
     dirs = [Path(r) for r in args.runs]
     ms = [json.loads((d / "metrics.json").read_text()) for d in dirs]
-    oofs = [pd.read_csv(d / "oof.csv").set_index("StudyInstanceUID") for d in dirs]
+    oofs = [pd.read_csv(d / ("oof_tta_slot.csv" if args.tta else "oof.csv")).set_index("StudyInstanceUID") for d in dirs]
     common = sorted(set.intersection(*(set(o.index) for o in oofs)))
     ranks = [o.loc[common, R.LABELS].rank(pct=True) for o in oofs]
     ens = sum(ranks) / len(ranks)
@@ -40,7 +41,7 @@ def main():
     ens.reset_index().to_csv(out / "oof.csv", index=False)
     base_args = dict(ms[0]["args"])
     run_args = base_args | {"log": args.log or f"rank-average of {', '.join(d.name for d in dirs)}",
-                            "members": [d.name for d in dirs]}
+                            "members": [d.name for d in dirs], "tta": args.tta}
     (out / "args.json").write_text(json.dumps(run_args, indent=1))
 
     folds, train, report = R._truth(pd.DataFrame({"labels_file": [base_args["labels"]],

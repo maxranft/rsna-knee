@@ -66,7 +66,8 @@ from knee.preprocess import SLOTS, _to_grid, choose_series, load_volume, to_uint
 from review import NOTICEABLE, QUESTIONS, SLOT_TITLES  # noqa: E402
 
 PACKAGED = ROOT / "build/rsna-knee-heads"
-ARCH = ("tokens", "dim", "d", "layers", "labels", "feats")
+ARCH = ("tokens", "dim", "d", "layers", "labels", "feats", "aux", "slot_proj", "local")
+OPTIONAL = {"aux": [], "slot_proj": False, "local": False}  # absent from older configs
 NOT_DICOM = {".zip", ".exe", ".dll", ".htm", ".html", ".js", ".css", ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".bmp",
              ".xml", ".ini", ".inf", ".json", ".csv", ".md", ".npz", ".py"}
 PLANES = ["Sagittal", "Coronal", "Axial"]  # the patient axis the slice normal is closest to: x, y, z
@@ -248,12 +249,12 @@ def load_heads(path):
     dirs = runs if path.name.startswith("ens-") else [path]
     cfgs = [json.loads((d / "config.json").read_text()) for d in dirs]
     cfg = cfgs[0]
-    assert all(c.get(k) == cfg.get(k) for c in cfgs for k in ARCH), "ensemble members differ in architecture"
+    assert all(c.get(k, OPTIONAL.get(k)) == cfg.get(k, OPTIONAL.get(k)) for c in cfgs for k in ARCH), "ensemble members differ in architecture"
     if cfg.get("canon"):
         sys.exit("these heads mirror left knees (--canon); laterality is not implemented here")
     heads = []
     for f in (f for d in dirs for f in sorted(d.glob("head_fold*.pt"))):
-        h = Head(cfg["tokens"], cfg["dim"], cfg["d"], len(cfg["labels"]), cfg["layers"])
+        h = Head.from_config(cfg)
         h.load_state_dict(torch.load(f, map_location="cpu"))
         heads.append(h.eval())
     assert heads, f"no head_fold*.pt in {path}"

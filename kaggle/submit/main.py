@@ -32,6 +32,13 @@ studies = list(pd.read_csv(COMP / "test.csv").StudyInstanceUID)
 LABEL_COLS = [c for c in sample.columns if c != "StudyInstanceUID"]
 
 
+def find_optional(pattern):
+    try:
+        return find(pattern)[0]
+    except FileNotFoundError:
+        return None
+
+
 def work(u):
     try:
         return u, process_study(u, by_study.get(u, []), COMP / "test_series")[0], None
@@ -47,7 +54,7 @@ cfg = json.loads(find("config.json")[0].read_text())
 assert cfg["labels"] == LABEL_COLS, (cfg["labels"], LABEL_COLS)
 heads = []
 for f in find("head_fold*.pt"):
-    h = Head(cfg["tokens"], cfg["dim"], cfg["d"], len(LABEL_COLS), cfg["layers"])
+    h = Head.from_config(cfg)
     h.load_state_dict(torch.load(f, map_location="cpu"))
     heads.append(h.to(dev).eval())
 pca = None
@@ -55,8 +62,9 @@ if cfg["dim"] != encoder.num_features:  # heads trained on a PCA-reduced cache (
     z = np.load(find("pca.npz")[0])
     pca = (torch.as_tensor(z["mean"], device=dev), torch.as_tensor(z["components"], device=dev))
     assert tuple(pca[1].shape) == (cfg["dim"], encoder.num_features), pca[1].shape
-print(f"{len(studies)} studies, {len(heads)} heads, pca {pca is not None}, device {dev}, setup {time.time() - t0:.0f}s",
-      flush=True)
+tta = find_optional("tta.json") is not None  # leave-one-slot-out TTA (scripts/tta_oof.py)
+print(f"{len(studies)} studies, {len(heads)} heads, pca {pca is not None}, tta {tta}, device {dev}, "
+      f"setup {time.time() - t0:.0f}s", flush=True)
 
 rows, errors = [], []
 with torch.no_grad():
@@ -74,13 +82,21 @@ with torch.no_grad():
         slot = torch.as_tensor(np.concatenate([np.full(len(arrays[s]), SLOT_NAMES.index(s)) for s in names]), device=dev).unsqueeze(0)
         depth = torch.as_tensor(np.concatenate([np.linspace(0, 1, len(arrays[s])) for s in names]), dtype=torch.float32, device=dev).unsqueeze(0)
         pad = torch.zeros_like(slot, dtype=torch.bool)
-        p = torch.stack([torch.sigmoid(h(x, slot, depth, pad)) for h in heads]).mean(0)[0].cpu().numpy()
+        if tta:  # batch of the full study + the study without each slot; averaged per head, then over heads
+            x, slot, depth, pad = slot_variants(x[0], slot[0], depth[0])
+        p = torch.stack([torch.sigmoid(h(x, slot, depth, pad)).mean(0) for h in heads]).mean(0).cpu().numpy()
         rows.append([u] + p.tolist())
         if i % 100 == 0:
             print(f"{i}/{len(studies)}  {(time.time() - t0) / 60:.1f} min", flush=True)
 pool.close()
 
 sub = pd.DataFrame(rows, columns=["StudyInstanceUID"] + LABEL_COLS)
+mix_file = find_optional("rank_mix.json")  # scripts/rank_mix.py: labels -> weighted mean of output ranks over the test set
+mix = json.loads(mix_file.read_text()) if mix_file else {}
+rk = sub[LABEL_COLS].rank(pct=True)
+for target, w in mix.items():
+    sub[target] = sum(v * rk[src] for src, v in w.items()) / sum(w.values())
+print(f"rank mix: {mix or 'none'}", flush=True)
 sub.to_csv(OUT / "submission.csv", index=False)
 print(json.dumps({"studies": len(sub), "errors": len(errors), "minutes": round((time.time() - t0) / 60, 2),
                   "first_errors": errors[:5]}, indent=1))

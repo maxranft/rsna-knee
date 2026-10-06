@@ -138,7 +138,7 @@ def runs_section(runs, ref, V):
         total = len(str(args.get("folds", "0,1,2,3,4")).split(",")) * int(args.get("epochs", 12) or 12)
         sec_per_epoch = hist[-1]["elapsed_s"] / n_done if n_done else None
         v, notes = V.get(rid, ("", ""))
-        kind = "ensemble" if rid.startswith("ens-") else "single"
+        kind = "ensemble" if rid.startswith(("ens-", "mix-")) else "single"
         out.append({
             "id": rid, "status": r.status, "kind": kind, "change": r.change, "verdict": "reference" if rid == ref else v,
             "notes": notes, "gold": r.gold, "report": r.report, "gold_by_label": r.gold_by_label,
@@ -280,7 +280,7 @@ def clean(o):
 def collect(ref=None):
     runs = R.load_runs()
     V = verdicts()
-    done_single = [r for r in runs.index if runs.loc[r, "status"] == "done" and not r.startswith("ens-")]
+    done_single = [r for r in runs.index if runs.loc[r, "status"] == "done" and not r.startswith(("ens-", "mix-"))]
     if ref is None:
         tagged = [r for r in done_single if V.get(r, ("",))[0] == "reference"]
         ref = tagged[-1] if tagged else max(done_single, key=lambda r: runs.loc[r, "report"])

@@ -170,6 +170,42 @@ E19 best config + --bootstrap (bagging), seeds 42-44  more ensemble diversity   
 Package the efficiency candidate instead:
     .venv/bin/python scripts/package_heads.py runs/ens-20261001-114201   (40 heads; same folder, so upload one at a time) Same inference architecture, so
                                                      ensemble                        they can join the 15 packaged heads.
+--- 2026-10-04: auto_improve.py round 1 (8 hyperparameters, 3 seeds each): only --epochs 20 adopted (+0.0019 report). ---
+--- 2026-10-05: round 2, structural (runs/queue_auto_20261005-*.sh, log runs/auto_improve.log) ---
+ENS9 the 23 seeds of the best config only            drop older, weaker members      DONE (ens-20261005-222134). ADOPTED (accurate):
+     (16 ep seeds 42-55, 20 ep seeds 42-44, 56-61)                                   gold 0.7566, report 0.8031; vs ENS8 report
+                                                                                     +0.0014 (CI +0.0007..+0.0022), gold +0.0085.
+                                                                                     Packaged (115 heads) in build/rsna-knee-heads.
+     Checked on OOF, not adopted: all 73 same-arch runs (+0.0006 more, 3x heads); mixing architectures (+0.0002);
+     a label-correlation stacker (report -0.002..-0.003). That analysis was a one-off script (not kept).
+A1  --aux Effusion,side_L                            S2: raw Effusion + knee side    queued in auto_improve
+                                                     as extra outputs (weight 0.5)
+A2  --slot-proj                                      one input projection per plane  queued
+A3  --local                                          neighbour slices in a series    queued
+A4  --teacher runs/teacher-ep20x9 --distill 0.5      S4: born-again distillation     queued. Teacher: scripts/teacher_preds.py (done), the
+                                                                                     fold-k heads of 9 seeds on fold k's TRAINING
+                                                                                     studies (an OOF teacher would leak fold k).
+New heads (aux / slot-proj / local) load everywhere through Head.from_config(config.json); the kernel needs no change.
+SYN scripts/rank_mix.py runs/<ens> --mix '{"Synovitis": {"Synovitis": 1, "Effusion": 1}}'
+                                                     Synovitis := rank-mean of the   DONE (mix-20261005-223734). ADOPTED for both
+                                                     Synovitis and Effusion outputs  submissions. Gold Synovitis 0.53 -> 0.66,
+                                                                                     macro gold +0.011 (CI +0.005..+0.018), report
+                                                                                     -0.002. Gold Synovitis (47% of gold studies) is
+                                                                                     effusion-synovitis, not what reports call
+                                                                                     synovitis (20%). Rule fixed before scoring;
+                                                                                     stronger post-hoc mixes (Effusion only, + Baker's)
+                                                                                     are for the public LB to decide, not 58 studies.
+TTA scripts/tta_oof.py runs/<ens>                    leave-one-slot-out TTA          DONE (ens-20261005-230844). ADOPTED for the
+                                                     (writes oof_tta_slot.csv)       accurate submission only: 23 seeds +0.0005
+                                                                                     report (CI above 0), +0.003 gold; single
+                                                                                     models +0.005 report.
+ACCURATE SUBMISSION = mix-20261006-114310: 23 seeds + 9 distilled seeds + TTA + Synovitis mix. Gold 0.771, report 0.803
+    (ENS8 was 0.748 / 0.802).  .venv/bin/python scripts/package_heads.py runs/mix-20261006-114310   (160 heads + pca + tta.json + rank_mix.json)
+EFFICIENCY SUBMISSION = mix-20261006-114316: 9 distilled seeds + Synovitis mix, no TTA. Gold 0.765, report 0.803.
+    .venv/bin/python scripts/package_heads.py runs/mix-20261006-114316   (45 heads + pca + rank_mix.json)
+A4 distillation: ADOPTED 2026-10-06 (3-run ensemble report +0.0046, CI +0.0034..+0.0060, gold +0.004; single models ~0.798 report).
+A1-A3 (aux, slot-proj, local): REJECTED (gold -0.008..-0.009 each).
+The kernel reads tta.json / rank_mix.json from the heads dataset if present; one kernel serves both submissions.
 
 Queue files: runs/queue3.sh runs its lines one after another (nohup runs/queue3.sh > runs/queue3.out &),
 then keep the Mac awake for it: caffeinate -is -w $(pgrep -f runs/queue3.sh).

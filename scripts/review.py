@@ -269,7 +269,7 @@ class RealSource:
     def model(self, fold):
         if fold not in self.models:
             c = self.cfg
-            m = Head(c["tokens"], c["dim"], c["d"], len(LABELS), c["layers"])
+            m = Head.from_config(c)
             m.load_state_dict(torch.load(self.run / f"head_fold{fold}.pt", map_location="cpu"))
             self.models[fold] = m.eval()
         return self.models[fold]

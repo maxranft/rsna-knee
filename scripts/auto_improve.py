@@ -35,7 +35,8 @@ AUTO = ROOT / "runs/auto"
 SEEDS = (42, 43, 44)
 FIXED = ["--workers", "0", "--no-open"]
 DEFAULTS = {"--lr": "3e-4", "--wd": "0.05", "--bs": "16", "--d": "256", "--layers": "1", "--drop": "0.1",
-            "--epochs": "12", "--slot-drop": "0.1", "--ema": "0", "--label-smooth": "0"}  # train_head.py defaults
+            "--epochs": "12", "--slot-drop": "0.1", "--ema": "0", "--label-smooth": "0", "--aux": "none"}  # train_head.py defaults
+# on/off flags (train_head.py store_true) are given the value true in queue.json and passed without a value
 # best single-model config (experiments.md, 2026-09-30) and its seed 42/43/44 runs
 BASE = {"--feats": "data/features/dinov2s-pca128", "--labels": "data/labeller/all-v2/report_scores_all.csv",
         "--label-map": '{"Effusion": "Effusion@moderate"}', "--drop": "0.3", "--epochs": "16", "--slot-drop": "0.3"}
@@ -68,7 +69,8 @@ def save_state(state):
 
 
 def describe(flags, base):
-    return ", ".join(f"{k.lstrip('-')} {v} (was {base.get(k, DEFAULTS.get(k, 'off'))})" for k, v in flags.items())
+    return ", ".join(f"{k.lstrip('-')}" + (" on" if v is True else f" {v}") + f" (was {base.get(k, DEFAULTS.get(k, 'off'))})"
+                     for k, v in flags.items())
 
 
 def find_run(log):
@@ -86,7 +88,7 @@ def train(flags, seed, log):
     if done:
         print(f"  seed {seed}: already done ({done.name})", flush=True)
         return done
-    args = [x for k, v in flags.items() for x in (k, v)]
+    args = [x for k, v in flags.items() for x in ((k,) if v is True else (k, v))]
     print(f"\n=== {datetime.now():%m-%d %H:%M}  seed {seed}: {log}", flush=True)
     r = subprocess.run([sys.executable, str(ROOT / "scripts/train_head.py"), *args, *FIXED, "--seed", str(seed),
                         "--log", log], cwd=ROOT)
@@ -165,7 +167,12 @@ def main():
     args, extra = ap.parse_known_args()
     queue, state = load_state()
     if args.add:
-        flags = dict(zip(extra[::2], extra[1::2]))
+        flags, i = {}, 0
+        while i < len(extra):  # "--flag value", or a bare "--flag" (an on/off switch)
+            if i + 1 < len(extra) and not extra[i + 1].startswith("--"):
+                flags[extra[i]], i = extra[i + 1], i + 2
+            else:
+                flags[extra[i]], i = True, i + 1
         queue.append({"key": args.add[0], "flags": flags, "note": args.add[1]})
         (AUTO / "queue.json").write_text(json.dumps(queue, indent=1))
         print(f"added {args.add[0]}: {flags}")

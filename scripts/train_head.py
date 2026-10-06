@@ -56,6 +56,7 @@ def evaluate(model, dl, dev):
     with torch.no_grad():
         for x, slot, depth, pad, y in dl:
             logits = model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev))
+            y = y[:, :logits.shape[1]]  # the 12 labels; auxiliary targets (--aux) follow them
             tot += lossf(logits, y.to(dev)).item()
             n += y.numel()
             preds.append(torch.sigmoid(logits).cpu().numpy())
@@ -74,6 +75,13 @@ def main():
     p.add_argument("--bootstrap", action="store_true", help="bagging: train each fold on a bootstrap resample of its training studies")
     p.add_argument("--ema", type=float, default=0.0, help="evaluate and save an exponential moving average of the weights (e.g. 0.999); 0 = off")
     p.add_argument("--label-smooth", type=float, default=0.0, help="training targets t -> t(1 - e) + e/2; 0 = off")
+    p.add_argument("--aux", default="", help="comma-separated auxiliary targets trained as extra outputs (S2): labeller columns "
+                                           "(e.g. aux_prior_surgery, Effusion, ACL@abnormal) or side_L (meta/laterality.csv)")
+    p.add_argument("--aux-weight", type=float, default=0.5, help="loss weight of each auxiliary output (labels weigh 1)")
+    p.add_argument("--teacher", default="", help="dir of teacher_fold{k}.csv (scripts/teacher_preds.py): distillation targets per fold")
+    p.add_argument("--distill", type=float, default=0.5, help="with --teacher: report-only training targets t -> (1 - a) t + a teacher; gold kept")
+    p.add_argument("--slot-proj", action="store_true", help="one input projection per series slot instead of a shared one")
+    p.add_argument("--local", action="store_true", help="add each slice's neighbours in the same series before the transformer")
     p.add_argument("--folds", default="0,1,2,3,4")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--bs", type=int, default=16)
@@ -111,6 +119,16 @@ def main():
     have = set(index.StudyInstanceUID)
     targets = {u: (train_csv.loc[u, LABELS].values.astype(np.float32) if u in gold_ids else report.loc[u].values.astype(np.float32))
                for u in folds.StudyInstanceUID if u in have and (u in gold_ids or u in report.index)}
+    aux = [a for a in args.aux.split(",") if a]
+    if aux:  # appended after the labels; report-derived for every study, gold ones included
+        cols = scores.copy()
+        if "side_L" in aux:
+            lat = pd.read_csv(ROOT / "meta/laterality.csv").set_index("StudyInstanceUID")
+            cols["side_L"] = (lat.side.reindex(cols.index) == "L").astype(float)
+        av = cols[aux].fillna(0.5).astype(np.float32)
+        targets = {u: np.concatenate([t, av.loc[u].values]) for u, t in targets.items() if u in av.index}
+        print(f"auxiliary targets: {aux} (weight {args.aux_weight})", flush=True)
+    loss_w = torch.tensor([1.0] * len(LABELS) + [args.aux_weight] * len(aux), device=dev)
     folds = folds[folds.StudyInstanceUID.isin(targets)]
     left = None
     if args.canon:
@@ -131,23 +149,32 @@ def main():
         if args.bootstrap:  # same size, drawn with replacement; differs per seed and fold
             tr = [str(u) for u in np.random.default_rng(args.seed * 100 + f).choice(tr, size=len(tr), replace=True)]
         va = folds.StudyInstanceUID[folds.fold == f].tolist()
-        dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, targets, train=True, seed=args.seed + f, left=left,
+        tr_targets = targets
+        if args.teacher:  # fold-f teacher: heads that never saw fold f, predicting this fold's training studies
+            tp = pd.read_csv(ROOT / args.teacher / f"teacher_fold{f}.csv").set_index("StudyInstanceUID")[LABELS]
+            tr_targets = dict(targets)
+            for u in set(tr) - gold_ids:
+                t = targets[u].copy()
+                t[:len(LABELS)] = (1 - args.distill) * t[:len(LABELS)] + args.distill * tp.loc[u].values
+                tr_targets[u] = t
+        dl_tr = torch.utils.data.DataLoader(Studies(tr, index, feats, tr_targets, train=True, seed=args.seed + f, left=left,
                                                     slice_drop=args.slice_drop, slot_drop=args.slot_drop), batch_size=args.bs,
                                             shuffle=True, collate_fn=collate, num_workers=args.workers, persistent_workers=args.workers > 0)
         dl_va = torch.utils.data.DataLoader(Studies(va, index, feats, targets, left=left), batch_size=args.bs * 2, collate_fn=collate,
                                             num_workers=args.workers)
-        model = Head(T, C, args.d, len(LABELS), args.layers, drop=args.drop).to(dev)
+        model = Head(T, C, args.d, len(LABELS), args.layers, drop=args.drop, n_aux=len(aux), slot_proj=args.slot_proj,
+                     local=args.local).to(dev)
         ema = copy.deepcopy(model).eval() if args.ema else None  # Head has no buffers, so parameters are the whole state
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
         steps = args.epochs * len(dl_tr)
         sched = torch.optim.lr_scheduler.OneCycleLR(opt, args.lr, total_steps=steps, pct_start=0.1)
-        lossf = torch.nn.BCEWithLogitsLoss()
+        lossf = torch.nn.BCEWithLogitsLoss(reduction="none")
         for ep in range(args.epochs):
             model.train()
             tot = 0.0
             for x, slot, depth, pad, y in dl_tr:
                 y = y * (1 - args.label_smooth) + args.label_smooth / 2 if args.label_smooth else y
-                loss = lossf(model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev)), y.to(dev))
+                loss = (lossf(model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev), with_aux=True), y.to(dev)) * loss_w).sum(1).mean() / len(LABELS)
                 opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -170,7 +197,8 @@ def main():
     oof.to_csv(out / "oof.csv", index=False)
     (out / "config.json").write_text(json.dumps({"tokens": int(T), "dim": int(C), "d": args.d, "layers": args.layers, "drop": args.drop,
                                                  "labels": LABELS, "label_map": label_map, "feats": str(fd),
-                                                 "canon": bool(args.canon)}, indent=1))
+                                                 "canon": bool(args.canon), "aux": aux, "slot_proj": args.slot_proj,
+                                                 "local": args.local}, indent=1))
 
 
     # ---- metrics ----
