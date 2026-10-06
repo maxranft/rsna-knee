@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 MODE = os.environ.get("MODE", "{mode}")  # "gold": the 58 gold studies only (fast iteration); "all": every study
-MODEL = os.environ.get("MODEL", "Qwen/Qwen2.5-7B-Instruct")
+MODEL = os.environ.get("MODEL", "{model}")  # AWQ checkpoints are detected by vLLM from their config
 OUT = Path(os.environ.get("OUT", "/kaggle/working"))
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "vllm"], check=True)

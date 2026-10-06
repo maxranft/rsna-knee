@@ -8,6 +8,7 @@ Metrics (pooled out-of-fold): gold macro AUC on the 58 gold studies (the arbiter
 report labels (score > 0.5) on the report-only studies. Writes runs/<id>/{oof.csv, metrics.json}.
 """
 import argparse
+import copy
 import json
 import sys
 import time
@@ -71,6 +72,8 @@ def main():
     p.add_argument("--slot-drop", type=float, default=0.1, help="training: drop each series slot with this probability")
     p.add_argument("--gold-repeat", type=int, default=1, help="training: list each gold study this many times per epoch")
     p.add_argument("--bootstrap", action="store_true", help="bagging: train each fold on a bootstrap resample of its training studies")
+    p.add_argument("--ema", type=float, default=0.0, help="evaluate and save an exponential moving average of the weights (e.g. 0.999); 0 = off")
+    p.add_argument("--label-smooth", type=float, default=0.0, help="training targets t -> t(1 - e) + e/2; 0 = off")
     p.add_argument("--folds", default="0,1,2,3,4")
     p.add_argument("--epochs", type=int, default=12)
     p.add_argument("--bs", type=int, default=16)
@@ -134,6 +137,7 @@ def main():
         dl_va = torch.utils.data.DataLoader(Studies(va, index, feats, targets, left=left), batch_size=args.bs * 2, collate_fn=collate,
                                             num_workers=args.workers)
         model = Head(T, C, args.d, len(LABELS), args.layers, drop=args.drop).to(dev)
+        ema = copy.deepcopy(model).eval() if args.ema else None  # Head has no buffers, so parameters are the whole state
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
         steps = args.epochs * len(dl_tr)
         sched = torch.optim.lr_scheduler.OneCycleLR(opt, args.lr, total_steps=steps, pct_start=0.1)
@@ -142,19 +146,24 @@ def main():
             model.train()
             tot = 0.0
             for x, slot, depth, pad, y in dl_tr:
+                y = y * (1 - args.label_smooth) + args.label_smooth / 2 if args.label_smooth else y
                 loss = lossf(model(x.to(dev), slot.to(dev), depth.to(dev), pad.to(dev)), y.to(dev))
                 opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
                 sched.step()
+                if ema is not None:
+                    with torch.no_grad():
+                        for pe, pm in zip(ema.parameters(), model.parameters()):
+                            pe.mul_(args.ema).add_(pm.detach(), alpha=1 - args.ema)
                 tot += loss.item() * len(y)
-            preds, val_loss = evaluate(model, dl_va, dev)
+            preds, val_loss = evaluate(ema if ema is not None else model, dl_va, dev)
             fold_oof = pd.DataFrame(preds, columns=LABELS).assign(StudyInstanceUID=va)
             va_rep = [u for u in va if u not in gold_ids]
             tracker.log(f, ep + 1, train_loss=tot / len(tr), val_loss=val_loss,
                         val_auc=aucs(fold_oof, va_rep, (report > 0.5).astype(int)))
-        torch.save(model.state_dict(), out / f"head_fold{f}.pt")
+        torch.save((ema if ema is not None else model).state_dict(), out / f"head_fold{f}.pt")
         oof.append(fold_oof.assign(fold=f))
         refresh_dashboard()
     oof = pd.concat(oof)

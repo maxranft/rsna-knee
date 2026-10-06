@@ -42,6 +42,8 @@ QUESTIONS.update({
     "Effusion@moderate": "Does the report describe a moderate or large joint effusion (more than a small, minimal, trace or physiological amount of fluid)?",
     # +0.031, within noise on 58 studies: carried as a column, not adopted
     "ACL@abnormal": "Is the anterior cruciate ligament (ACL) abnormal in the report: torn (partial or complete), sprained, insufficient, or a reconstructed ACL graft?",
+    # v3: manual review found cartilage fissures ("fisura") scored as fractures (docs/labeller.md, 2026-09-24)
+    "Fracture@bone": "Does the report describe a fracture, meaning a break in a bone (including avulsion, osteochondral, impaction or insufficiency fracture), not a cartilage fissure or chondral defect?",
 })
 ADOPTED = {"Effusion": "Effusion@moderate"}  # label -> column the trainer should use (--label-map)
 

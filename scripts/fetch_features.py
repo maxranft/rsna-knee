@@ -38,7 +38,7 @@ def valid(f, rows=None):
         return False
 
 
-fetch(r"^(parts\.json|index\.csv|summary\.json)$", dest)
+fetch(r"^(parts\.json|index\.csv|summary\.json|pca\.npz)$", dest)  # pca.npz: caches projected on Kaggle
 meta = json.loads((dest / "parts.json").read_text())
 for stem, m in meta.items():
     shape, target = tuple(m["shape"]), dest / f"{stem}.npy"

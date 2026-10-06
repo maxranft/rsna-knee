@@ -15,9 +15,13 @@ SHARD_KERNELS = [f"maxranft/rsna-knee-preprocess-shard{k}" for k in range(N_SHAR
 KERNELS = [  # (name, module, entry point, {placeholder: value}, gpu, internet, kernel_sources)
     *[(f"rsna-knee-preprocess-shard{k}", "src/knee/preprocess.py", "kaggle/preprocess/main.py",
        {"{shard}": str(k), "{n_shards}": str(N_SHARDS)}, False, False, []) for k in range(N_SHARDS)],
-    *[(f"rsna-knee-labeller-{mode}", "src/knee/report_labeller.py", "kaggle/labeller/main.py",
-       {"{mode}": mode}, True, True, []) for mode in ("gold", "all")],
-    ("rsna-knee-features-dinov2s", "src/knee/features.py", "kaggle/features/main.py", {}, True, True, SHARD_KERNELS),
+    *[(f"rsna-knee-labeller-{mode}{suffix}", "src/knee/report_labeller.py", "kaggle/labeller/main.py",
+       {"{mode}": mode, "{model}": model}, True, True, []) for mode in ("gold", "all")
+      for suffix, model in (("", "Qwen/Qwen2.5-7B-Instruct"), ("-14b", "Qwen/Qwen2.5-14B-Instruct-AWQ"))],
+    ("rsna-knee-features-dinov2s", "src/knee/features.py", "kaggle/features/main.py", {"{pca_k}": "0"}, True, True,
+     SHARD_KERNELS),
+    ("rsna-knee-features-dinov2b", "src/knee/features.py", "kaggle/features/main.py",  # ViT-B/14: 86 M params, 768-d
+     {"vit_small_patch14_dinov2.lvd142m": "vit_base_patch14_dinov2.lvd142m", "{pca_k}": "128"}, True, True, SHARD_KERNELS),
     ("rsna-knee-features-dinov2s-parts", [], "kaggle/rechunk/main.py", {}, False, False, ["maxranft/rsna-knee-features-dinov2s"]),
     ("rsna-knee-translate", [], "kaggle/translate/main.py", {}, True, True, []),
     ("rsna-knee-assets", "src/knee/features.py", "kaggle/assets/main.py", {}, False, True, []),
