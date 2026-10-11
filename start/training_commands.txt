@@ -1,0 +1,71 @@
+TRAINING COMMANDS (rsna-knee)
+Run these in Terminal, from the project folder. Start with:
+  cd ~/Projects/rsna-knee
+
+Only run one training at a time. Two at once fill the Mac's 16 GB of memory and both stall.
+Each finished run is logged in experiments.md and shows up on the dashboard.
+
+
+1. THE SHORTCUTS (easiest)
+--------------------------
+# Everything at once: training (own window) + dashboard (browser) + grading tool (http://127.0.0.1:8765)
+open -a Terminal start/0_run_project.command
+
+# Training only: 3 new seeds in the background, live log in this window (about 20 min per seed)
+start/3_background_training.command
+SEEDS="80 81" start/3_background_training.command     # choose the seeds
+start/3_background_training.command runs/queue11.sh   # run an existing queue file instead
+
+# Keep training going with the lid closed (asks for your admin password; desk only, ideally plugged in)
+start/4_allow_lid_closed.command
+
+NOTE: start/3 still trains the OLD best config from 2026-09-30 (16 epochs, d 256, no teacher).
+The current best config is the one in section 2.
+
+
+2. TRAIN ONE MODEL DIRECTLY (current best config)
+--------------------------------------------------
+Current best = PCA-128 features, dropout 0.3, slot-drop 0.3, 28 epochs, d 384, distilled from teacher-ep20x9.
+Change --seed for each new model. Takes about 60 min on the Mac.
+
+.venv/bin/python scripts/train_head.py \
+  --feats data/features/dinov2s-pca128 \
+  --labels data/labeller/all-v2/report_scores_all.csv \
+  --label-map '{"Effusion": "Effusion@moderate"}' \
+  --drop 0.3 --slot-drop 0.3 --epochs 28 --d 384 \
+  --teacher runs/teacher-ep20x9 --distill 0.5 \
+  --workers 0 --no-open \
+  --seed 80 \
+  --log "ensemble member: current best config, seed 80"
+
+# Same thing in the background, so you can close the window (log goes to runs/best_s80.log):
+nohup .venv/bin/python scripts/train_head.py \
+  --feats data/features/dinov2s-pca128 --labels data/labeller/all-v2/report_scores_all.csv \
+  --label-map '{"Effusion": "Effusion@moderate"}' --drop 0.3 --slot-drop 0.3 --epochs 28 --d 384 \
+  --teacher runs/teacher-ep20x9 --distill 0.5 --workers 0 --no-open --seed 80 \
+  --log "ensemble member: current best config, seed 80" > runs/best_s80.log 2>&1 &
+caffeinate -is -w $!    # keeps the Mac awake until that run ends
+
+# Quick test on one fold only (about 1/5 of the time): add  --folds 0
+# Every option:  .venv/bin/python scripts/train_head.py --help
+
+
+3. THE AUTO-IMPROVE LOOP
+------------------------
+It tries one change at a time on the best config (3 seeds each) and keeps a change only if it clearly helps.
+
+.venv/bin/python scripts/auto_improve.py --plan                 # show the base config and every verdict; trains nothing
+.venv/bin/python scripts/auto_improve.py --until 2026-10-13     # run what's pending, then extra seeds, until that date
+.venv/bin/python scripts/auto_improve.py --add dinov2b "DINOv2-B features" --feats data/features/dinov2b-pca128
+                                                                # queue a new candidate change
+
+
+4. WATCH, STOP, SEE RESULTS
+---------------------------
+scripts/watch_training.sh                     # follow the newest queue live (Ctrl+C stops watching, not training)
+pgrep -fl scripts/train_head.py               # is anything training right now?
+
+pkill -f 'runs/queue'; pkill -f scripts/auto_improve.py; pkill -f scripts/train_head.py    # STOP all training
+
+.venv/bin/python scripts/dashboard.py --open   # results dashboard in the browser
+start/1_review_tool.command                    # grading tool for the latest run (http://127.0.0.1:8765)
