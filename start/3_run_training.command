@@ -29,7 +29,7 @@ lid_closed() {  # $1 = pid of the queue; scripts/keep_awake.sh switches sleep ba
   fi
 }
 
-if pgrep -f scripts/train_head.py >/dev/null; then
+if pgrep -f 'ython[^ ]* scripts/train_head\.py' >/dev/null; then  # the trainer itself, not a shell that names it
   echo "A training run is already going. Only one at a time: two fill the Mac's memory and both stall."
   echo "Showing its live log instead."
   # the queue process itself ("/bin/bash runs/queue....sh"), not a log watcher that mentions its name

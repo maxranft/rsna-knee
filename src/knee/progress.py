@@ -57,9 +57,13 @@ class ProgressTracker:
             fh.write(json.dumps(rec) + "\n")
         self.render()
         best = self._best(fold)
+        delta, gamma = self._greeks(fold)
         print(f"fold {fold} epoch {epoch}/{self.epochs}  train {train_loss:.4f}  val {val_loss:.4f}  "
               f"val AUC {rec['val_macro_auc']:.3f} (best {best['val_macro_auc']:.3f} @ {best['epoch']})  "
+              f"delta {delta:+.4f}  gamma {gamma:+.4f}  "
               f"elapsed {rec['elapsed_s'] / 60:.1f} min  ETA {self._eta() / 60:.1f} min", flush=True)
+        if epoch == self.epochs:  # the fold's last epoch: every label's validation AUC (against report labels)
+            print(f"fold {fold} done  " + "  ".join(f"{l} {v:.3f}" for l, v in val_auc.items()), flush=True)
 
     def finish(self, **final):
         self.final = final
@@ -71,6 +75,14 @@ class ProgressTracker:
     def _best(self, fold):
         h = [r for r in self._fold_hist(fold) if r["val_macro_auc"] is not None]
         return max(h, key=lambda r: r["val_macro_auc"]) if h else {"val_macro_auc": float("nan"), "epoch": "-"}
+
+    def _greeks(self, fold, k=3):
+        """(delta, gamma) of the fold so far, as knee.dashboard.greeks: delta = validation macro AUC gained per epoch
+        (mean of the last k epochs), gamma = the change in that delta since the epoch before. 0 until there is data."""
+        h = [r["val_macro_auc"] for r in self._fold_hist(fold) if r["val_macro_auc"] is not None]
+        d = [b - a for a, b in zip(h, h[1:])]
+        mean = lambda v: sum(v) / len(v) if v else 0.0  # noqa: E731
+        return mean(d[-k:]), (mean(d[-k:]) - mean(d[-k - 1:-1]) if len(d) > 1 else 0.0)
 
     def _eta(self):
         done = len(self.hist)

@@ -222,6 +222,11 @@ def main():
             fh.write(row)
         print("logged to experiments.md")
     refresh_dashboard()
+    try:  # the statistical analysis, for the terminal log; like the dashboard it can never fail a finished run
+        from knee.dashboard import analysis_text
+        print(analysis_text(run_id), flush=True)
+    except Exception as e:
+        print(f"(statistical analysis skipped: {e})", flush=True)
 
 
 if __name__ == "__main__":  # DataLoader workers are spawned on macOS and re-import this file

@@ -27,6 +27,7 @@ scripts/train_head.py
   evaluate()             predictions and mean loss of a model on the validation fold
   aucs()                 AUC per label for a set of studies (skips a label with only one class)
   refresh_dashboard()    rebuild runs/dashboard.html in the background; can never stop training
+  (at the end it also prints analysis_text() from src/knee/dashboard.py: see section 4)
 
 src/knee/head.py  (the model and its data)
   Head.__init__()        build the head: slice projection, slot and depth embeddings, transformer, one attention
@@ -49,6 +50,7 @@ src/knee/progress.py  (history.jsonl and progress.png)
   ProgressTracker._fold_hist() the epochs recorded for one fold
   ProgressTracker._best()      the best epoch of a fold so far
   ProgressTracker._eta()       time left, from the average epoch so far
+  ProgressTracker._greeks()    delta and gamma of the fold so far, for the epoch line
   ProgressTracker._style()     shared look of a panel
   ProgressTracker._curves()    loss and validation AUC curves
   ProgressTracker._bars()      AUC per label at the latest epoch
@@ -112,6 +114,8 @@ src/knee/dashboard.py
   data_section()        counts of studies, slices, folds, label prevalence, scanners, knee side, feature caches
   normalise_vendor()    tidy the scanner maker's name
   efficiency_section()  estimated runtime of a submission
+  analysis_text()       one run's statistical analysis as text for the terminal: its seeds, Cliff's delta
+                        against the current best, delta and gamma, betas and per-label scores
 
 src/knee/results.py
   load_runs()           one row per run in runs/, from args.json, metrics.json and history.jsonl

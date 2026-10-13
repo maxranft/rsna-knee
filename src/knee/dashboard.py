@@ -403,6 +403,51 @@ def efficiency_section(data):
             "encoder_rate": round(feat["slices"] / feat["minutes"] / 60), "measured": False}
 
 
+# ---------------------------------------------------------------- terminal summary
+def analysis_text(run_id):
+    """The statistical analysis of one finished run as plain text, for the training log: its scores next to the other
+    seeds of its config, Cliff's delta against the current best config, the learning curve's delta and gamma, and the
+    betas across configs beside each label's scores."""
+    runs = R.load_runs()
+    r = runs.loc[run_id]
+    groups = config_groups(runs)
+    base = best_group(groups, None)
+    mine = next((g for g in groups if run_id in g["runs"]), None)
+    out = [f"=== statistical analysis: run {run_id} ===", f"macro AUC        gold {r.gold:.4f}   report {r.report:.4f}"]
+    if mine:
+        x = runs.loc[mine["runs"], ["gold", "report"]].astype(float)
+        pm = {k: f"{x[k].mean():.4f}" + (f" ± {x[k].std():.4f}" if len(x) > 1 else "") for k in x}
+        out.append(f"its config       {len(x)} seeds: gold {pm['gold']}, report {pm['report']}; this run is "
+                   f"{int((x.report > r.report).sum()) + 1} of {len(x)} on report, {int((x.gold > r.gold).sum()) + 1} of {len(x)} on gold")
+        if mine is base:
+            out.append("vs current best  this is the current best config")
+        elif base:
+            y = runs.loc[base["runs"], ["gold", "report"]].astype(float)
+            cl = {}
+            for k in ("report", "gold"):
+                d, lo, hi = boot_cliff(x[k].values, y[k].values)
+                cl[k] = f"{d:+.2f}" + (f" [{lo:+.2f}, {hi:+.2f}]" if min(len(x), len(y)) >= CI_SEEDS else "")
+            out.append(f"vs current best  Cliff's delta report {cl['report']}, gold {cl['gold']} ({len(x)} seeds against {len(y)}; "
+                       f"+1 = every seed wins, -1 = every seed loses)")
+    g = greeks(compact_history(r.history))
+    out.append("learning curve   " + (f"flat from epoch {g['flat']} of {len(g['delta']) + 1}" if g["flat"] else "not flat by the last epoch")
+               + (f"; at the end delta {round(g['delta'][-1], 4) + 0:+.4f} and gamma {round(g['gamma'][-1], 4) + 0:+.4f} AUC per epoch" if g["gamma"] else ""))
+    b = betas_section(runs, groups, base)
+    if b:
+        m = b["transfer"]["Macro"]
+        out.append(f"gold vs report   beta {m[0]:.2f} across {b['n']} configs (90% interval {m[1]:.2f} to {m[2]:.2f}, r {b['r']:.2f}): "
+                   f"a report gain of 0.010 has meant about {m[0] * 0.01:.3f} on gold")
+    out.append(f"{'per label':19s}{'gold':>7s}{'report':>8s}" + ("   model beta   transfer beta (90% interval)" if b else ""))
+    for l in R.LABELS:
+        line = f"  {l:17s}" + "".join(f"{v:{w}.3f}" if v is not None else " " * (w - 1) + "-"
+                                    for v, w in ((r.gold_by_label.get(l), 7), (r.report_by_label.get(l), 8)))
+        if b and l in b["model"]:
+            t = b["transfer"][l]
+            line += f"   {b['model'][l][0]:+10.2f}   {t[0]:+.2f} [{t[1]:+.2f}, {t[2]:+.2f}]"
+        out.append(line)
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------- build
 def clean(o):
     """JSON-safe: NaN / inf -> None, numpy scalars -> Python, Paths -> str."""
