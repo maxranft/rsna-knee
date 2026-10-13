@@ -1,0 +1,167 @@
+FUNCTIONS USED BY THE TRAINING COMMANDS (rsna-knee)
+Companion to start/training_commands.txt: every Python function each command there runs.
+Left out: shell-only steps (pgrep, pkill, caffeinate, pmset, open, tail), which have no functions, and the
+JavaScript inside the dashboard page and the grading page.
+
+
+1. WHICH COMMAND RUNS WHAT
+--------------------------
+start/0_run_project.command          -> start/3 (training), start/1 (grading tool), scripts/dashboard.py --open
+start/3_background_training.command  -> scripts/train_head.py once per seed, then scripts/watch_training.sh
+scripts/auto_improve.py              -> scripts/train_head.py once per seed (as a separate process)
+scripts/train_head.py                -> scripts/dashboard.py --quiet after every fold and at the end
+start/1_review_tool.command          -> scripts/review.py
+scripts/watch_training.sh            -> tail on the run logs; no functions
+start/4_allow_lid_closed.command     -> scripts/keep_awake.sh, WHICH DOES NOT EXIST (see the note at the end)
+
+So "run project", start/3 and auto_improve all use everything in sections 2 and 4, and start/0 also uses section 5.
+
+
+2. TRAINING: scripts/train_head.py
+----------------------------------
+scripts/train_head.py
+  main()                 read the options; build the targets (gold labels for the 58 gold studies, report scores for
+                         the rest, mixed with the teacher when --teacher is set); train one head per fold; write
+                         oof.csv, metrics.json, config.json and head_fold*.pt; add the row to experiments.md
+  evaluate()             predictions and mean loss of a model on the validation fold
+  aucs()                 AUC per label for a set of studies (skips a label with only one class)
+  refresh_dashboard()    rebuild runs/dashboard.html in the background; can never stop training
+
+src/knee/head.py  (the model and its data)
+  Head.__init__()        build the head: slice projection, slot and depth embeddings, transformer, one attention
+                         query per label
+  Head.forward()         all slices of a study -> 12 scores (logits)
+  fourier()              turn a slice's position in its series into sine and cosine features
+  Studies.__init__()     dataset of studies: which cached slices belong to each study, and its targets
+  Studies.feats          open the feature files, once per worker
+  Studies.__len__()      number of studies
+  Studies.__getitem__()  one study's slice tokens, slot ids, depths and targets; in training it randomly drops
+                         a series slot (and slices, with --slice-drop)
+  collate()              pad the studies of a batch to the same length
+  mirror()               lay a left knee out like a right knee; only runs with --canon, which no listed command passes
+
+src/knee/progress.py  (history.jsonl and progress.png)
+  ProgressTracker.__init__()   start history.jsonl and progress.png for the run
+  ProgressTracker.log()        record one epoch, redraw the picture, print the "fold 0 epoch 1/28 ..." line
+  ProgressTracker.finish()     add the final gold and report AUC to the picture
+  ProgressTracker.render()     draw the four panels and save the picture
+  ProgressTracker._fold_hist() the epochs recorded for one fold
+  ProgressTracker._best()      the best epoch of a fold so far
+  ProgressTracker._eta()       time left, from the average epoch so far
+  ProgressTracker._style()     shared look of a panel
+  ProgressTracker._curves()    loss and validation AUC curves
+  ProgressTracker._bars()      AUC per label at the latest epoch
+  ProgressTracker._status()    the text panel (progress, best epoch, final scores)
+
+
+3. THE AUTO-IMPROVE LOOP: scripts/auto_improve.py
+-------------------------------------------------
+--plan uses main, load_state, describe, seed_cliff. --add uses main, load_state. --until uses all of them.
+
+scripts/auto_improve.py
+  main()            read the options; print the base config and every verdict; run what is pending
+  load_state()      read runs/auto/queue.json and state.json (creates them the first time)
+  save_state()      write state.json
+  describe()        say a change in words, e.g. "epochs 28 (was 20)"
+  run_candidate()   train 3 seeds of one change, judge it, write the verdict, adopt it if it passed
+  train()           run train_head.py for one seed, or reuse the finished run
+  find_run()        find a finished run by its --log text
+  judge()           compare two 3-run ensembles on report and gold labels (paired bootstrap) and apply the rule
+  seed_cliff()      Cliff's delta between the candidate's seeds and the base's seeds, for report and gold
+  note_verdict()    write Adopted / Rejected into the Notes column of experiments.md
+  fill_seeds()      after the candidates, train extra seeds of the base config
+
+src/knee/dashboard.py  (statistics shared with the dashboard)
+  truth()           fold table, gold labels and report labels (train.csv is read without its Report column)
+  boot_diff()       difference in macro AUC between two sets of predictions, with a 90% interval
+  macro()           macro AUC over the 12 labels
+  auc()             AUC of one label
+  cliff()           Cliff's delta: share of pairs won minus share of pairs lost
+
+
+4. THE DASHBOARD: scripts/dashboard.py
+--------------------------------------
+scripts/dashboard.py
+  main()            read the options; build once, open it with --open, rebuild on a timer with --watch
+  build_locked()    build unless another build is already running
+
+src/knee/dashboard.py
+  build()               collect everything, put it into the page template, write runs/dashboard.html
+  collect()             pick the reference run and gather every section
+  clean()               make the numbers safe to store as JSON
+  verdicts()            read Adopted / Rejected / Current reference from experiments.md
+  runs_section()        one row per run: scores, difference from the reference, learning curve, progress
+  head_params()         number of weights in a run's head
+  compact_history()     validation AUC per epoch, per fold
+  configs_section()     group runs into configs (same settings, different seeds) and compare each with the
+                        current best config; differs() inside it words how a config differs from the best
+  config_of()           the settings that define a config (everything except the seed)
+  boot_cliff()          Cliff's delta with a 90% interval
+  cliff(), boot_diff(), macro(), auc(), truth()   as in section 3
+  reference_section()   the reference model per label: AUC with intervals, ROC curves, right vs left knee
+  boot_labels()         AUC per label with a 90% interval
+  data_section()        counts of studies, slices, folds, label prevalence, scanners, knee side, feature caches
+  normalise_vendor()    tidy the scanner maker's name
+  efficiency_section()  estimated runtime of a submission
+
+src/knee/results.py
+  load_runs()           one row per run in runs/, from args.json, metrics.json and history.jsonl
+  _json(), _history()   read one run's files
+
+
+5. THE GRADING TOOL: start/1_review_tool.command -> scripts/review.py
+---------------------------------------------------------------------
+scripts/review.py
+  main()                    read the options, pick the run, start the local web server, open the browser
+  latest_run()              the newest finished run
+  make_handler()            build the web request handler H around the app
+  H.do_GET()                answer the page's requests: the page itself, the queue, an item, its maps, an image
+  H.do_POST()               take a decision or a change of queue from the page
+  H.send()                  send a reply
+  H.log_message()           keep the server quiet
+  App.__init__()            the grading session
+  App.load_queue()          build the queue for a mode and finding
+  App.session()             the queue and what has been decided so far
+  App.tally()               counts of the decisions
+  App.item()                everything shown for one item: probability, labels, slice evidence, summary, report
+  App.region()              the coarse 4x4 evidence map of one slice
+  App.fine()                the finer 8x8 evidence map of one slice
+  App.image()               one slice as a PNG
+  App.decide()              record a decision in meta/reviews.csv with what it implies
+  RealSource.__init__()     load the run: config, out-of-fold predictions, report scores
+  RealSource.queue()        the (study, finding) items to grade, without the ones already graded
+  RealSource.model()        load the head of one fold
+  RealSource.tokens()       load one study's cached features
+  RealSource.explain()      how much each slice moved the score (leave one slice out)
+  RealSource.region()       how much each of the 16 regions of a slice moved the score
+  RealSource.fine_region()  the same for 8x8 image blocks, by re-encoding the slice
+  RealSource.encoder()      the frozen encoder on the CPU, plus the run's PCA
+  RealSource.report()       the report's sentences, in English when a translation exists
+  RealSource.translations() reload the translations when the file changes
+  RealSource.fetch_translations()   download the translations from Kaggle in the background (go() inside it)
+  RealSource.stack()        one study's images
+  RealSource.ready()        how many of the queue's image stacks are downloaded
+  StackFetcher.__init__(), StackFetcher.run()   download the image stacks from Kaggle in the background
+  verdict()                 probability -> present or absent (0.5)
+  consequences()            what Accept and Deny each say about the truth, the model and the label
+  summarise()               plain-English account of which slices carried the call
+  split_sentences()         split a report into sentences
+  report_view()             mark the sentences that mention the finding
+  to_png()                  an array as PNG bytes
+  read_reviews()            read meta/reviews.csv
+  stack_path()              where a study's image stack is stored
+
+src/knee/head.py:      Head.from_config(), Head.forward(), fourier(), Studies (as in section 2)
+src/knee/features.py:  load_encoder() loads the frozen DINOv2 encoder; encode() turns slices into tokens
+
+
+6. NOT USED BY THESE COMMANDS
+-----------------------------
+scripts/review.py   DemoSource (--demo), ExternalSource and MeanHead (--external, start/6_run_project_external.command)
+src/knee/head.py    slot_variants() (test-time augmentation, scripts/tta_oof.py)
+src/knee/results.py the notebook and compare helpers: pick_baseline, pick_candidate, leaderboard, label_table,
+                    paired_bootstrap, side_split, plot_curves, plot_dumbbell, live and their private helpers
+
+
+NOTE: start/4_allow_lid_closed.command calls scripts/keep_awake.sh, and that file is not in the project (it was
+never committed). Until it exists, start/4 cannot switch sleep off, so a closed lid still pauses training.

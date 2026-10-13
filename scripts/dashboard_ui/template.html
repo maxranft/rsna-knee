@@ -152,6 +152,10 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
       </div>
       <div id="curves"></div>
     </div>
+    <div class="card scroll" style="margin-top:16px">
+      <h3>Configs across seeds</h3><p class="note" id="configsNote"></p>
+      <div id="configs" style="margin-top:8px"></div>
+    </div>
     <div class="card scroll" style="margin-top:16px"><div id="board"></div></div>
   </section>
 
@@ -583,6 +587,27 @@ function renderRuns() {
   }
 }
 
+function renderConfigs() {
+  const box = $("#configs"), C = D.configs || { rows: [] }; box.replaceChildren();
+  $("#configsNote").textContent = `Runs with the same settings and different seeds, for every config with ${C.min_seeds} or more seeds. Cliff's δ compares a config with the current best seed by seed: the share of seed pairs it wins minus the share it loses (+1 every seed wins, 0 no difference, −1 every seed loses). The 90% interval is shown when both configs have at least ${C.ci_seeds} seeds.`;
+  if (!C.rows.length) { H("p", { class: "note" }, box, "No config has enough seeds yet."); return; }
+  const t = H("table", {}, box), hd = H("tr", {}, H("thead", {}, t));
+  for (const [c, num] of [["Config, as it differs from the current best"], ["Seeds", 1], ["Report, mean ± sd", 1], ["Cliff's δ report (90% CI)", 1], ["Gold, mean ± sd", 1], ["Cliff's δ gold (90% CI)", 1]])
+    H("th", num ? { class: "num" } : {}, hd, c);
+  const tb = H("tbody", {}, t);
+  for (const r of C.rows) {
+    const tr = H("tr", r.is_base ? { class: "ref" } : {}, tb);
+    H("td", { title: `runs ${r.first} to ${r.last}` }, tr, r.desc);
+    H("td", { class: "num" }, tr, String(r.n));
+    for (const k of ["report", "gold"]) {
+      const m = r[k];
+      H("td", { class: "num" }, tr, f4(m.mean) + (m.sd != null ? ` ± ${m.sd.toFixed(4)}` : ""));
+      const td = H("td", { class: "num" }, tr, r.is_base ? "current best" : sg(m.cliff, 2) + (m.lo != null ? ` [${sg(m.lo, 2)}, ${sg(m.hi, 2)}]` : ""));
+      if (!r.is_base) { const c = divColor(m.cliff, 1); td.style.background = c.bg; td.style.color = c.fg; }
+    }
+  }
+}
+
 let heatMetric = "report";
 function divColor(d, scale) {
   const a = Math.max(-1, Math.min(1, d / scale)) * 0.8, lerp = (c1, c2, t) => c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
@@ -739,7 +764,7 @@ function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
   document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto"))));
 }
-function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderHeat(); renderReference(); renderData(); renderEfficiency(); }
+function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderHeat(); renderReference(); renderData(); renderEfficiency(); }
 applyTheme(store.get("theme") || "auto");
 document.querySelectorAll("[data-theme-set]").forEach(b => b.addEventListener("click", () => { store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet); renderAll(); }));
 document.querySelectorAll("[data-heat]").forEach(b => b.addEventListener("click", () => {

@@ -9,6 +9,8 @@ The rule from CLAUDE.md, made automatic: compare 3-run rank-average ensembles (s
 when report macro AUC improves with its paired-bootstrap 90% interval above zero AND gold macro AUC drops by no more
 than 0.02 (gold differences below that are noise); otherwise reject. Candidates must keep the training labels fixed:
 the report yardstick is computed from the base's labels, so label changes are judged separately, on gold.
+Each verdict also states Cliff's delta between the candidate's seeds and the base's (share of seed pairs the candidate
+wins minus the share it loses), as a seed-level check next to the ensemble comparison. It is not part of the rule.
 
 Every run is logged by train_head.py in experiments.md, and the verdict goes into the first seed's Notes as
 **Adopted** / **Rejected** (the dashboard reads those tags). State lives in runs/auto/: queue.json (candidates, read
@@ -114,6 +116,15 @@ def judge(a_runs, b_runs):
     return rep["lo"] > 0 and gld["diff"] > -0.02, rep, gld
 
 
+def seed_cliff(a_runs, b_runs):
+    """Cliff's delta of B's single-seed macro AUCs over A's: {"report": d, "gold": d}; None if a run is gone."""
+    try:
+        m = {r: json.loads((ROOT / "runs" / r / "metrics.json").read_text()) for r in [*a_runs, *b_runs]}
+    except FileNotFoundError:
+        return None
+    return {k: D.cliff([m[r][f"{k}_macro"] for r in b_runs], [m[r][f"{k}_macro"] for r in a_runs]) for k in ("report", "gold")}
+
+
 def note_verdict(run_ids, verdict, text):
     """Append the verdict to the first seed's Notes in experiments.md and point the other seeds at it."""
     md = ROOT / "experiments.md"
@@ -133,18 +144,20 @@ def run_candidate(c, state):
     runs = [train(flags, s, f"auto: {desc}, seed {s}; vs {state['base_desc']}").name for s in SEEDS]
     adopt, rep, gld = judge(state["base_runs"], runs)
     verdict = "Adopted" if adopt else "Rejected"
+    cl = seed_cliff(state["base_runs"], runs)
     text = (f"(3 seeds vs {state['base_desc']}, runs {', '.join(state['base_runs'])}): 3-run ensemble report "
             f"{rep['diff']:+.4f} (90% CI {rep['lo']:+.4f}..{rep['hi']:+.4f}), gold {gld['diff']:+.4f} "
-            f"(P(better) {gld['p_better']:.2f}). Rule: report CI above 0 and gold no worse than -0.02")
+            f"(P(better) {gld['p_better']:.2f}). Seed by seed, Cliff's delta: report {cl['report']:+.2f}, gold "
+            f"{cl['gold']:+.2f}. Rule: report CI above 0 and gold no worse than -0.02")
     note_verdict(runs, verdict, text)
     state["done"][key] = {"verdict": verdict, "flags": c["flags"], "desc": desc, "runs": runs, "base_runs": state["base_runs"],
-                          "report": rep, "gold": gld, "at": datetime.now().isoformat(timespec="seconds")}
+                          "report": rep, "gold": gld, "cliff": cl, "at": datetime.now().isoformat(timespec="seconds")}
     if adopt:
         state["base"], state["base_runs"] = flags, runs
         state["base_desc"] = f"{state['base_desc']} + {desc}"
     save_state(state)
     print(f"\n*** {key}: {verdict.upper()}  report {rep['diff']:+.4f} [{rep['lo']:+.4f}, {rep['hi']:+.4f}]  "
-          f"gold {gld['diff']:+.4f}", flush=True)
+          f"gold {gld['diff']:+.4f}  Cliff's delta report {cl['report']:+.2f}, gold {cl['gold']:+.2f}", flush=True)
 
 
 def fill_seeds(state, until, n):
@@ -180,8 +193,10 @@ def main():
     print(f"base: {state['base_desc']}\n  runs {', '.join(state['base_runs'])}")
     for c in queue:
         d = state["done"].get(c["key"])
+        cl = d and (d.get("cliff") or seed_cliff(d["base_runs"], d["runs"]))  # verdicts from before it was stored
         print(f"  {c['key']:12s} {describe(c['flags'], state['base']):45s} "
-              + (f"{d['verdict']} (report {d['report']['diff']:+.4f}, gold {d['gold']['diff']:+.4f})" if d else "pending"))
+              + (f"{d['verdict']} (report {d['report']['diff']:+.4f}, gold {d['gold']['diff']:+.4f}"
+                 + (f"; Cliff's delta report {cl['report']:+.2f}, gold {cl['gold']:+.2f})" if cl else ")") if d else "pending"))
     if args.plan:
         return
     while True:

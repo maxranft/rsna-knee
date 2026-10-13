@@ -1,5 +1,6 @@
-"""Results dashboard -> runs/dashboard.html: every run with its verdict, the reference model's per-label efficacy
-(AUC with 90% intervals, ROC curves, label ceiling, knee side), the data, efficiency, and the run in progress.
+"""Results dashboard -> runs/dashboard.html: every run with its verdict, configs compared across seeds (Cliff's delta),
+the reference model's per-label efficacy (AUC with 90% intervals, ROC curves, label ceiling, knee side), the data,
+efficiency, and the run in progress.
 
 Metrics and aggregates only: train.csv is always read without its Report column, and no image is touched.
 Built by scripts/dashboard.py (and at the end of every training run). The page is one self-contained file; it
@@ -52,6 +53,22 @@ def boot_diff(Y, Pa, Pb, n, seed=0):
     lo, hi = np.nanpercentile(d, [5, 95])
     return {"diff": float(macro(Y, Pb, full) - macro(Y, Pa, full)), "lo": float(lo), "hi": float(hi),
             "p_better": float(np.nanmean(d > 0))}
+
+
+def cliff(x, y):
+    """Cliff's delta of x over y: P(x > y) - P(x < y) over all pairs (-1 every x loses, 0 no difference, +1 every x
+    wins). x and y are one value per seed, e.g. macro AUC of every seed of two configs."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    return float(np.sign(x[:, None] - y[None, :]).mean())
+
+
+def boot_cliff(x, y, n=2000, seed=0):
+    """Cliff's delta with a 90% bootstrap interval, resampling the seeds within each group: (delta, lo, hi)."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    rng = np.random.default_rng(seed)
+    X, Y = x[rng.integers(0, len(x), (n, len(x)))], y[rng.integers(0, len(y), (n, len(y)))]
+    lo, hi = np.percentile(np.sign(X[:, :, None] - Y[:, None, :]).mean((1, 2)), [5, 95])
+    return cliff(x, y), float(lo), float(hi)
 
 
 def boot_labels(Y, P, n, seed=0):
@@ -152,6 +169,62 @@ def runs_section(runs, ref, V):
             "started": datetime.strptime(rid[:15], "%Y%m%d-%H%M%S").isoformat() if re.match(r"\d{8}-\d{6}", rid) else None,
         })
     return out, (folds, gold_t, report_t, ref_oof)
+
+
+NOT_CONFIG = ("seed", "log", "no_open", "workers")  # what may differ between seeds of one config
+OFF = {"canon": "", "slice_drop": 0.0, "gold_repeat": 1, "bootstrap": False, "ema": 0.0, "label_smooth": 0.0, "aux": "",
+       "teacher": "", "slot_proj": False, "local": False}  # train_head.py switches at their off value
+DEPENDS = {"distill": "teacher", "aux_weight": "aux"}  # only used when the other one is on
+MIN_SEEDS, CI_SEEDS = 3, 5  # a config is listed from 3 seeds; an interval needs 5 seeds in both configs
+
+
+def config_of(args):
+    """The settings that define a config: train_head.py args without the seed and without switches left off, so runs
+    from before a switch existed still match the later runs that leave it off."""
+    a = {k: v for k, v in args.items() if k not in NOT_CONFIG and not (k in OFF and v in (OFF[k], "none"))}
+    return {k: v for k, v in a.items() if k not in DEPENDS or DEPENDS[k] in a}
+
+
+def configs_section(runs, ref):
+    """Finished single runs grouped into configs (same settings, different seeds), each compared seed by seed with the
+    current best config: the auto-improve base (runs/auto/state.json), else the reference run's config."""
+    groups = {}
+    for rid, r in runs.iterrows():
+        a = r["dir"] / "args.json"
+        if r.status != "done" or rid.startswith(("ens-", "mix-")) or not a.exists() or pd.isna(r.gold) or pd.isna(r.report):
+            continue
+        cfg = config_of(json.loads(a.read_text()))
+        groups.setdefault(json.dumps(cfg, sort_keys=True), {"config": cfg, "runs": []})["runs"].append(rid)
+    state = ROOT / "runs/auto/state.json"
+    anchors = (json.loads(state.read_text()).get("base_runs", []) if state.exists() else []) + [ref]
+    base = next((g for a in anchors for g in groups.values() if a in g["runs"]), None)
+    if base is None:
+        return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": []}
+
+    def differs(cfg):  # how a config differs from the base, written like the train_head.py flags
+        out = []
+        for k in sorted(set(cfg) | set(base["config"])):
+            v = cfg.get(k)
+            if v != base["config"].get(k) and not (v is None and k in DEPENDS):  # "teacher off" already says it
+                out.append(k.replace("_", "-") + (" off" if v is None else " on" if v is True else
+                                                  f" {Path(v).name}" if k in ("feats", "labels", "teacher", "canon") else f" {v}"))
+        return " · ".join(out)
+
+    rows = []
+    for g in groups.values():
+        if g is not base and len(g["runs"]) < MIN_SEEDS:
+            continue
+        row = {"desc": differs(g["config"]) or "current best config", "is_base": g is base, "n": len(g["runs"]),
+               "first": g["runs"][0], "last": g["runs"][-1]}
+        for k in ("report", "gold"):
+            x, y = runs.loc[g["runs"], k].astype(float).values, runs.loc[base["runs"], k].astype(float).values
+            row[k] = {"mean": float(x.mean()), "sd": float(x.std(ddof=1)) if len(x) > 1 else None}
+            if g is not base:
+                d, lo, hi = boot_cliff(x, y)
+                row[k] |= {"cliff": d} | ({"lo": lo, "hi": hi} if min(len(x), len(y)) >= CI_SEEDS else {})
+        rows.append(row)
+    rows.sort(key=lambda r: (not r["is_base"], -r["report"]["mean"]))
+    return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": rows}
 
 
 def reference_section(runs, ref, truths):
@@ -288,7 +361,7 @@ def collect(ref=None):
     data = data_section(truths)
     return {"built": datetime.now().isoformat(timespec="seconds"), "reference": ref, "labels": R.LABELS,
             "deadlines": [{"name": n, "date": d, "days": (date.fromisoformat(d) - date.today()).days} for n, d in DEADLINES],
-            "runs": run_rows, "ref": reference_section(runs, ref, truths), "data": data,
+            "runs": run_rows, "configs": configs_section(runs, ref), "ref": reference_section(runs, ref, truths), "data": data,
             "efficiency": efficiency_section(data)}
 
 
