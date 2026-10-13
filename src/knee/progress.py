@@ -47,10 +47,11 @@ class ProgressTracker:
                 pass
 
     # ---- recording ----
-    def log(self, fold, epoch, train_loss, val_loss, val_auc):
+    def log(self, fold, epoch, train_loss, val_loss, val_auc, val_acc=None):
         aucs = [v for v in val_auc.values() if v == v]
         rec = {"fold": fold, "epoch": epoch, "train_loss": round(train_loss, 5), "val_loss": round(val_loss, 5),
                "val_macro_auc": round(sum(aucs) / len(aucs), 4) if aucs else None, "val_auc": val_auc,
+               "val_macro_acc": round(sum(val_acc.values()) / len(val_acc), 4) if val_acc else None,  # at the 0.5 threshold
                "elapsed_s": round(time.time() - self.t0, 1)}
         self.hist.append(rec)
         with open(self.jsonl, "a") as fh:
@@ -60,7 +61,7 @@ class ProgressTracker:
         delta, gamma = self._greeks(fold)
         print(f"fold {fold} epoch {epoch}/{self.epochs}  train {train_loss:.4f}  val {val_loss:.4f}  "
               f"val AUC {rec['val_macro_auc']:.3f} (best {best['val_macro_auc']:.3f} @ {best['epoch']})  "
-              f"delta {delta:+.4f}  gamma {gamma:+.4f}  "
+              f"delta {delta:+.4f}  gamma {gamma:+.4f}  " + (f"acc {rec['val_macro_acc']:.3f}  " if val_acc else "") +
               f"elapsed {rec['elapsed_s'] / 60:.1f} min  ETA {self._eta() / 60:.1f} min", flush=True)
         if epoch == self.epochs:  # the fold's last epoch: every label's validation AUC (against report labels)
             print(f"fold {fold} done  " + "  ".join(f"{l} {v:.3f}" for l, v in val_auc.items()), flush=True)

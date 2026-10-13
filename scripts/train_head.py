@@ -38,6 +38,12 @@ def aucs(oof, ids, truth):
     return res
 
 
+def accs(oof, ids, truth):
+    """Accuracy per label at the 0.5 threshold. A display metric for the dashboard: AUC, which is rank-based, decides."""
+    o = oof.set_index("StudyInstanceUID").loc[ids]
+    return {l: round(float(((o[l].values > 0.5) == (truth.loc[ids, l].values > 0.5)).mean()), 4) for l in LABELS}
+
+
 def refresh_dashboard():
     """Rebuild runs/dashboard.html in the background; never blocks or fails training."""
     try:
@@ -189,7 +195,7 @@ def main():
             fold_oof = pd.DataFrame(preds, columns=LABELS).assign(StudyInstanceUID=va)
             va_rep = [u for u in va if u not in gold_ids]
             tracker.log(f, ep + 1, train_loss=tot / len(tr), val_loss=val_loss,
-                        val_auc=aucs(fold_oof, va_rep, (report > 0.5).astype(int)))
+                        val_auc=aucs(fold_oof, va_rep, (report > 0.5).astype(int)), val_acc=accs(fold_oof, va_rep, report))
         torch.save((ema if ema is not None else model).state_dict(), out / f"head_fold{f}.pt")
         oof.append(fold_oof.assign(fold=f))
         refresh_dashboard()
@@ -206,9 +212,12 @@ def main():
     rep_eval = [u for u in oof.StudyInstanceUID if u not in gold_ids]
     gold_auc = aucs(oof, gold_eval, train_csv[LABELS]) if gold_eval else {}
     rep_auc = aucs(oof, rep_eval, (report > 0.5).astype(int))
+    rep_acc, gold_acc = accs(oof, rep_eval, report), accs(oof, gold_eval, train_csv[LABELS]) if gold_eval else {}
     m = {"run": run_id, "args": vars(args), "device": dev, "minutes": round((time.time() - t0) / 60, 1),
          "gold_macro": round(float(np.mean(list(gold_auc.values()))), 4) if gold_auc else None, "gold": gold_auc,
          "report_macro": round(float(np.mean(list(rep_auc.values()))), 4), "report": rep_auc,
+         "report_acc": round(float(np.mean(list(rep_acc.values()))), 4),
+         "gold_acc": round(float(np.mean(list(gold_acc.values()))), 4) if gold_acc else None,
          "n_gold": len(gold_eval), "n_report": len(rep_eval)}
     (out / "metrics.json").write_text(json.dumps(m, indent=1))
     tracker.finish(gold_macro_pooled=m["gold_macro"], report_macro_pooled=m["report_macro"], n_gold=len(gold_eval))
