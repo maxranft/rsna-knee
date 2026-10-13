@@ -1,4 +1,4 @@
-FUNCTIONS USED BY THE TRAINING COMMANDS (rsna-knee)
+FUNCTIONS USED BY THE COMMANDS (rsna-knee)
 Companion to start/training_commands.txt: every Python function each command there runs.
 Left out: shell-only steps (pgrep, pkill, caffeinate, pmset, open, tail), which have no functions, and the
 JavaScript inside the dashboard page and the grading page.
@@ -6,15 +6,16 @@ JavaScript inside the dashboard page and the grading page.
 
 1. WHICH COMMAND RUNS WHAT
 --------------------------
-start/0_run_project.command          -> start/3 (training), start/1 (grading tool), scripts/dashboard.py --open
-start/3_background_training.command  -> scripts/train_head.py once per seed, then scripts/watch_training.sh
+start/1_review_tool.command          -> scripts/review.py                                        (section 5)
+start/2_results_dashboard.command    -> scripts/dashboard.py --open                              (section 4)
+start/3_run_training.command         -> load_state() from scripts/auto_improve.py for the config, then
+                                        scripts/train_head.py once per seed, then scripts/watch_training.sh;
+                                        with LID_CLOSED=1 also scripts/keep_awake.sh       (sections 2 and 4)
+start/4_run_external.command             -> scripts/keep_awake.sh, scripts/dashboard.py --open, scripts/external_study.py,
+                                        scripts/review.py --external                    (sections 4 and 6)
 scripts/auto_improve.py              -> scripts/train_head.py once per seed (as a separate process)
 scripts/train_head.py                -> scripts/dashboard.py --quiet after every fold and at the end
-start/1_review_tool.command          -> scripts/review.py
-scripts/watch_training.sh            -> tail on the run logs; no functions
-start/4_allow_lid_closed.command     -> scripts/keep_awake.sh, WHICH DOES NOT EXIST (see the note at the end)
-
-So "run project", start/3 and auto_improve all use everything in sections 2 and 4, and start/0 also uses section 5.
+scripts/watch_training.sh, scripts/keep_awake.sh -> shell only; no functions
 
 
 2. TRAINING: scripts/train_head.py
@@ -93,10 +94,18 @@ src/knee/dashboard.py
   runs_section()        one row per run: scores, difference from the reference, learning curve, progress
   head_params()         number of weights in a run's head
   compact_history()     validation AUC per epoch, per fold
-  configs_section()     group runs into configs (same settings, different seeds) and compare each with the
-                        current best config; differs() inside it words how a config differs from the best
+  greeks()              a run's learning-curve delta (AUC gained per epoch) and gamma (change in delta), and the
+                        epoch from which it is flat
+  config_groups()       group runs into configs (same settings, different seeds)
   config_of()           the settings that define a config (everything except the seed)
+  best_group()          the current best config (the auto-improve base)
+  configs_section()     compare every config with the current best, seed by seed; differs() inside it words how
+                        a config differs from the best
   boot_cliff()          Cliff's delta with a 90% interval
+  betas_section()       betas across configs: each label against the other labels (report), and gold against
+                        report for each label and for the macro
+  beta(), boot_beta()   beta = covariance / variance (how much one score moves when another moves by 1), and
+                        the same with a 90% interval
   cliff(), boot_diff(), macro(), auc(), truth()   as in section 3
   reference_section()   the reference model per label: AUC with intervals, ROC curves, right vs left knee
   boot_labels()         AUC per label with a 90% interval
@@ -155,13 +164,50 @@ src/knee/head.py:      Head.from_config(), Head.forward(), fourier(), Studies (a
 src/knee/features.py:  load_encoder() loads the frozen DINOv2 encoder; encode() turns slices into tokens
 
 
-6. NOT USED BY THESE COMMANDS
+6. EXTERNAL SCAN: start/4_run_external.command -> scripts/external_study.py, then scripts/review.py --external
+---------------------------------------------------------------------------------------------------
+scripts/external_study.py  (the model on a scan from outside the competition)
+  main()               read the options, run every step below, write results/ and open the three graphs
+  unpack()             extract the zips in dicom/
+  scan()               find the MR series in the DICOM download and describe each one
+  orientation()        read a series' image orientation from its header
+  plane_of()           orientation -> Sagittal, Coronal or Axial
+  fat_suppressed()     decide from the header whether a series is fat-suppressed
+  link_series()        lay the series out in the folder layout the preprocessing reads
+  pick_slots()         choose the series for each of the four slots (with the --slot overrides)
+  load_heads()         load the trained heads (the packaged submission model, a run, or an ensemble)
+  member_runs()        the training runs those heads came from
+  predict()            probability per finding, and how much each slice moved it
+  reference_scores()   the training knees' scores, to say where this knee ranks among them
+  truth_summary()      do the findings the radiologist reported rank above the ones ruled out?
+  write_report()       write results/report.html; png(), strip_svg() and ordinal() are its helpers
+  scan_pictures(), load_pictures(), choose_pictures()   only for a picture export (PNG/JPEG) instead of DICOM
+
+scripts/external_graphs.py  (the three graphs opened in Preview)
+  write_graphs()             draw and save the three graphs
+  load()                     read the results written by external_study.py
+  scores_vs_training()       graph 1: this knee's scores against the training knees
+  where_the_model_looked()   graph 2: evidence across the slices of every series
+  strongest_slices()         graph 3: the slice with the strongest evidence for each finding
+  header(), source_note(), ordinal(), truth_colour(), truth_word()   titles, notes and colours
+
+scripts/review.py  (its grading window, port 8766; main, make_handler, H.*, App.* and the helpers as in section 5)
+  ExternalSource.__init__()  load the scan's results and the truth filled in from the radiologist's report
+  ExternalSource.queue()     the 12 findings, most unusual first
+  ExternalSource.explain()   the stored slice evidence for a finding
+  ExternalSource.model(), .tokens(), .encoder(), .stack(), .report(), .ready()   hand the tool the scan's data
+  MeanHead.__init__(), MeanHead.forward()   several heads as one model: their mean score
+
+src/knee/preprocess.py: choose_series() picks the series per slot; load_volume() reads a series into a volume;
+                        _to_grid() resamples it to the training grid; to_uint8() scales it to 0-255
+src/knee/features.py:   load_encoder(), encode() (as in section 5)
+src/knee/head.py:       Head.from_config(), Head.forward(), fourier()
+
+
+7. NOT USED BY THESE COMMANDS
 -----------------------------
-scripts/review.py   DemoSource (--demo), ExternalSource and MeanHead (--external, start/6_run_project_external.command)
+scripts/review.py   DemoSource (--demo: synthetic data to try the controls)
 src/knee/head.py    slot_variants() (test-time augmentation, scripts/tta_oof.py)
 src/knee/results.py the notebook and compare helpers: pick_baseline, pick_candidate, leaderboard, label_table,
                     paired_bootstrap, side_split, plot_curves, plot_dumbbell, live and their private helpers
 
-
-NOTE: start/4_allow_lid_closed.command calls scripts/keep_awake.sh, and that file is not in the project (it was
-never committed). Until it exists, start/4 cannot switch sleep off, so a closed lid still pauses training.

@@ -1,4 +1,4 @@
-TRAINING COMMANDS (rsna-knee)
+COMMANDS (rsna-knee)
 Run these in Terminal, from the project folder. Start with:
   cd ~/Projects/rsna-knee
 
@@ -6,21 +6,22 @@ Only run one training at a time. Two at once fill the Mac's 16 GB of memory and 
 Each finished run is logged in experiments.md and shows up on the dashboard.
 
 
-1. THE SHORTCUTS (easiest)
---------------------------
-# Everything at once: training (own window) + dashboard (browser) + grading tool (http://127.0.0.1:8765)
-open -a Terminal start/0_run_project.command
+1. THE LAUNCHERS (easiest; double-click in Finder or run here)
+--------------------------------------------------------------
+start/1_review_tool.command          # reviewer: the grading tool at http://127.0.0.1:8765 (images and reports)
+start/2_results_dashboard.command    # data visualiser: rebuild the results dashboard and open it in the browser
+start/3_run_training.command         # training: 3 new seeds of the current best config, live log in the window
+start/4_run_external.command             # External scan: dashboard, the model on the scan, its grading window (port 8766)
 
-# Training only: 3 new seeds in the background, live log in this window (about 20 min per seed)
-start/3_background_training.command
-SEEDS="80 81" start/3_background_training.command     # choose the seeds
-start/3_background_training.command runs/queue11.sh   # run an existing queue file instead
+# Training options (about 45 min per seed plugged in; the config is the auto-improve base, section 3)
+SEEDS="90 91" start/3_run_training.command        # choose the seeds
+start/3_run_training.command runs/queue11.sh      # run an existing queue file instead
+LID_CLOSED=1 start/3_run_training.command         # also keep training with the lid closed (asks for your admin
+                                                  # password; desk only, ideally plugged in). Works on a queue
+                                                  # that is already running too.
 
-# Keep training going with the lid closed (asks for your admin password; desk only, ideally plugged in)
-start/4_allow_lid_closed.command
-
-NOTE: start/3 still trains the OLD best config from 2026-09-30 (16 epochs, d 256, no teacher).
-The current best config is the one in section 2.
+# Grade a specific run instead of the latest one
+RUN=runs/<id> start/1_review_tool.command
 
 
 2. TRAIN ONE MODEL DIRECTLY (current best config)
@@ -67,5 +68,5 @@ pgrep -fl scripts/train_head.py               # is anything training right now?
 
 pkill -f 'runs/queue'; pkill -f scripts/auto_improve.py; pkill -f scripts/train_head.py    # STOP all training
 
-.venv/bin/python scripts/dashboard.py --open   # results dashboard in the browser
-start/1_review_tool.command                    # grading tool for the latest run (http://127.0.0.1:8765)
+start/2_results_dashboard.command             # results dashboard in the browser
+start/1_review_tool.command                   # grading tool for the latest run (http://127.0.0.1:8765)

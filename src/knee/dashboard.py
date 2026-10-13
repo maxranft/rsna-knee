@@ -1,6 +1,6 @@
-"""Results dashboard -> runs/dashboard.html: every run with its verdict, configs compared across seeds (Cliff's delta),
-the reference model's per-label efficacy (AUC with 90% intervals, ROC curves, label ceiling, knee side), the data,
-efficiency, and the run in progress.
+"""Results dashboard -> runs/dashboard.html: every run with its verdict and learning-curve delta and gamma, configs
+compared across seeds (Cliff's delta), label betas across configs, the reference model's per-label efficacy (AUC with
+90% intervals, ROC curves, label ceiling, knee side), the data, efficiency, and the run in progress.
 
 Metrics and aggregates only: train.csv is always read without its Report column, and no image is touched.
 Built by scripts/dashboard.py (and at the end of every training run). The page is one self-contained file; it
@@ -26,6 +26,7 @@ TEMPLATE = ROOT / "scripts/dashboard_ui/template.html"
 OUT = ROOT / "runs/dashboard.html"
 DEADLINES = [("Entry and team merger", "2026-10-15"), ("Final submission", "2026-10-22")]
 CACHE_VERSION = 2
+FLAT = 0.001  # validation macro AUC per epoch: a learning curve gaining less than this counts as flat
 TEST_STUDIES = 1300  # docs/competition.md: about 1,300 hidden test studies
 
 
@@ -69,6 +70,41 @@ def boot_cliff(x, y, n=2000, seed=0):
     X, Y = x[rng.integers(0, len(x), (n, len(x)))], y[rng.integers(0, len(y), (n, len(y)))]
     lo, hi = np.percentile(np.sign(X[:, :, None] - Y[:, None, :]).mean((1, 2)), [5, 95])
     return cliff(x, y), float(lo), float(hi)
+
+
+def beta(y, x):
+    """Beta of y on x, as in markets: cov(y, x) / var(x), how much y moves when x moves by 1."""
+    c = np.cov(np.asarray(y, float), np.asarray(x, float))
+    return float(c[0, 1] / c[1, 1])
+
+
+def boot_beta(y, x, n=2000, seed=0):
+    """Beta with a 90% bootstrap interval over the points: [beta, lo, hi]."""
+    y, x = np.asarray(y, float), np.asarray(x, float)
+    i = np.random.default_rng(seed).integers(0, len(x), (n, len(x)))
+    X, Y = x[i] - x[i].mean(1, keepdims=True), y[i] - y[i].mean(1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):  # a resample of one repeated point has no variance
+        lo, hi = np.nanpercentile((X * Y).sum(1) / (X * X).sum(1), [5, 95])
+    return [round(beta(y, x), 3), round(float(lo), 3), round(float(hi), 3)]
+
+
+def greeks(hist, k=3):
+    """A learning curve's sensitivities, named after the options Greeks. delta = validation macro AUC gained per epoch,
+    gamma = the change in delta per epoch: differences within each fold, averaged over the folds, as a k-epoch mean.
+    hist: {fold: [AUC per epoch]} (compact_history). -> delta from epoch 2 on, gamma from epoch 3 on, flat = the epoch
+    from which delta stays below FLAT (None while it has not), now = [delta, gamma] of the newest fold on its own."""
+    folds = [[v for v in f if v is not None] for f in hist.values()]
+
+    def curve(fs):
+        d = [np.mean([f[t] - f[t - 1] for f in fs if len(f) > t]) for t in range(1, max((len(f) for f in fs), default=0))]
+        d = [round(float(np.mean(d[max(0, i - k + 1):i + 1])), 5) for i in range(len(d))]
+        return d, [round(b - a, 5) for a, b in zip(d, d[1:])]
+
+    delta, gamma = curve(folds)
+    over = [i for i, v in enumerate(delta) if v >= FLAT]  # delta[i] is the gain going into epoch i + 2
+    flat = None if not delta or (over and over[-1] == len(delta) - 1) else (over[-1] + 3 if over else 2)
+    d, g = curve(folds[-1:])
+    return {"delta": delta, "gamma": gamma, "flat": flat, "now": [d[-1] if d else None, g[-1] if g else None]}
 
 
 def boot_labels(Y, P, n, seed=0):
@@ -151,6 +187,7 @@ def runs_section(runs, ref, V):
             if r.status == "done":
                 cache_f.write_text(json.dumps(cache))
         hist = r["history"]
+        curves = compact_history(hist)
         n_done = len(hist)
         total = len(str(args.get("folds", "0,1,2,3,4")).split(",")) * int(args.get("epochs", 12) or 12)
         sec_per_epoch = hist[-1]["elapsed_s"] / n_done if n_done else None
@@ -163,7 +200,7 @@ def runs_section(runs, ref, V):
             "slice_drop": float(r.slice_drop or 0), "epochs": args.get("epochs"), "seed": args.get("seed"),
             "lr": args.get("lr"), "d": args.get("d"), "layers": args.get("layers"), "drop": args.get("drop", 0.1),
             "members": args.get("members"), "params": cache.get("params"), "vs_ref": cache.get("vs_ref"),
-            "history": compact_history(hist), "progress": [n_done, total],
+            "history": curves, "greeks": greeks(curves), "progress": [n_done, total],
             "eta_min": round(sec_per_epoch * (total - n_done) / 60, 1) if sec_per_epoch and r.status == "running" else None,
             "last": hist[-1] if hist else None,
             "started": datetime.strptime(rid[:15], "%Y%m%d-%H%M%S").isoformat() if re.match(r"\d{8}-\d{6}", rid) else None,
@@ -176,6 +213,7 @@ OFF = {"canon": "", "slice_drop": 0.0, "gold_repeat": 1, "bootstrap": False, "em
        "teacher": "", "slot_proj": False, "local": False}  # train_head.py switches at their off value
 DEPENDS = {"distill": "teacher", "aux_weight": "aux"}  # only used when the other one is on
 MIN_SEEDS, CI_SEEDS = 3, 5  # a config is listed from 3 seeds; an interval needs 5 seeds in both configs
+MIN_CONFIGS = 8  # betas are measured across configs, so they need a spread of them
 
 
 def config_of(args):
@@ -185,9 +223,8 @@ def config_of(args):
     return {k: v for k, v in a.items() if k not in DEPENDS or DEPENDS[k] in a}
 
 
-def configs_section(runs, ref):
-    """Finished single runs grouped into configs (same settings, different seeds), each compared seed by seed with the
-    current best config: the auto-improve base (runs/auto/state.json), else the reference run's config."""
+def config_groups(runs):
+    """Finished single runs grouped into configs (same settings, different seeds): [{"config": ..., "runs": [ids]}]."""
     groups = {}
     for rid, r in runs.iterrows():
         a = r["dir"] / "args.json"
@@ -195,9 +232,18 @@ def configs_section(runs, ref):
             continue
         cfg = config_of(json.loads(a.read_text()))
         groups.setdefault(json.dumps(cfg, sort_keys=True), {"config": cfg, "runs": []})["runs"].append(rid)
+    return list(groups.values())
+
+
+def best_group(groups, ref):
+    """The current best config: the auto-improve base (runs/auto/state.json), else the reference run's config."""
     state = ROOT / "runs/auto/state.json"
     anchors = (json.loads(state.read_text()).get("base_runs", []) if state.exists() else []) + [ref]
-    base = next((g for a in anchors for g in groups.values() if a in g["runs"]), None)
+    return next((g for a in anchors for g in groups if a in g["runs"]), None)
+
+
+def configs_section(runs, groups, base):
+    """Every config with enough seeds, compared seed by seed (Cliff's delta) with the current best config."""
     if base is None:
         return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": []}
 
@@ -211,7 +257,7 @@ def configs_section(runs, ref):
         return " · ".join(out)
 
     rows = []
-    for g in groups.values():
+    for g in groups:
         if g is not base and len(g["runs"]) < MIN_SEEDS:
             continue
         row = {"desc": differs(g["config"]) or "current best config", "is_base": g is base, "n": len(g["runs"]),
@@ -225,6 +271,31 @@ def configs_section(runs, ref):
         rows.append(row)
     rows.sort(key=lambda r: (not r["is_base"], -r["report"]["mean"]))
     return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": rows}
+
+
+def betas_section(runs, groups, base):
+    """Betas across configs, one point per config (the mean over its seeds), for the configs trained on the current
+    best config's labels. model: a label's report AUC against the mean report AUC of the other labels (which labels
+    gain most from a better model). transfer: a label's gold AUC against its own report AUC, and the macro likewise
+    (whether gains on the report labels show up on gold). Each is [beta, lo, hi], a 90% bootstrap interval."""
+    same = [g for g in groups if base and all(g["config"].get(k) == base["config"].get(k) for k in ("labels", "label_map"))]
+    if len(same) < MIN_CONFIGS:
+        return None
+
+    def per_label(col):
+        return np.array([[np.mean([runs.loc[r, col].get(l, np.nan) for r in g["runs"]]) for l in R.LABELS] for g in same])
+
+    def macro(col):
+        return np.array([runs.loc[g["runs"], col].astype(float).mean() for g in same])
+
+    rep, gold = per_label("report_by_label"), per_label("gold_by_label")
+    out = {"n": len(same), "model": {}, "transfer": {"Macro": boot_beta(macro("gold"), macro("report"))},
+           "r": float(np.corrcoef(macro("gold"), macro("report"))[0, 1])}
+    for j, l in enumerate(R.LABELS):
+        if not (np.isnan(rep[:, j]).any() or np.isnan(gold[:, j]).any()):
+            out["model"][l] = boot_beta(rep[:, j], np.delete(rep, j, 1).mean(1))
+            out["transfer"][l] = boot_beta(gold[:, j], rep[:, j])
+    return out
 
 
 def reference_section(runs, ref, truths):
@@ -358,10 +429,13 @@ def collect(ref=None):
         tagged = [r for r in done_single if V.get(r, ("",))[0] == "reference"]
         ref = tagged[-1] if tagged else max(done_single, key=lambda r: runs.loc[r, "report"])
     run_rows, truths = runs_section(runs, ref, V)
+    groups = config_groups(runs)
+    base = best_group(groups, ref)
     data = data_section(truths)
     return {"built": datetime.now().isoformat(timespec="seconds"), "reference": ref, "labels": R.LABELS,
             "deadlines": [{"name": n, "date": d, "days": (date.fromisoformat(d) - date.today()).days} for n, d in DEADLINES],
-            "runs": run_rows, "configs": configs_section(runs, ref), "ref": reference_section(runs, ref, truths), "data": data,
+            "runs": run_rows, "flat": FLAT, "configs": configs_section(runs, groups, base),
+            "betas": betas_section(runs, groups, base), "ref": reference_section(runs, ref, truths), "data": data,
             "efficiency": efficiency_section(data)}
 
 

@@ -6,27 +6,25 @@ Report macro AUC (4,349 studies) is the steadier signal for choosing between mod
 
 
 START HERE: launchers in start/ (double-click in Finder, or run them in a terminal)
-  start/0_run_project.command          RUN PROJECT ("run project" to Claude): training + dashboard + grading window.
-  start/1_review_tool.command          front-end visuals: the grading tool at http://127.0.0.1:8765 (images, reports;
-                                       for you only). Red outline = where the model's evidence for the finding sits
-                                       on the slice (8x8 occlusion, re-encoded). Zoom, brightness/contrast, G = jump
-                                       to the strongest slice, ? = all keys. RUN=runs/<id> picks a model.
-  start/2_results_dashboard.command    results visuals: rebuilds runs/dashboard.html and opens it (metrics only).
-  start/3_background_training.command  background training: 3 new seeds of the best config (or a queue file you
-                                       pass), one at a time, Mac kept awake, live log in the window. Ctrl+C or
-                                       closing the window stops watching, not training.
-  start/4_allow_lid_closed.command     let training run with the lid closed: switches macOS sleep off (your password)
-                                       until the running queue ends, then back on. Desk only, ideally plugged in.
-  start/5_test_real_scan.command       test on a real scan: the submission model on a knee MRI from outside the
-                                       competition (DICOM download in "external scan/dicom/"). Opens 3 graphs: scores vs
-                                       the training knees, where the model looked, the strongest slices (redraw:
-                                       scripts/external_graphs.py). --slot overrides. Not part of the submission.
-  start/6_run_project_external.command     RUN PROJECT EXTERNAL ("run project external" to Claude): sleep off for the lid
-                                       (password; back on when done or after 3 h), results dashboard, the model
-                                       on "external scan" (3 graphs in Preview), and the scan in the grading window at
-                                       http://127.0.0.1:8766 (grades go to external scan/results/reviews.csv).
-                                       Takes a DICOM download, or (approximately) a PNG export with one folder
-                                       per series; then put the field of view in external scan/fov_mm.txt.
+  start/1_review_tool.command          reviewer ("open frontend" to Claude, with the dashboard): the grading tool at
+                                       http://127.0.0.1:8765 (images, reports; for you only). Red outline = where
+                                       the model's evidence for the finding sits on the slice (8x8 occlusion,
+                                       re-encoded). Zoom, brightness/contrast, G = jump to the strongest slice,
+                                       ? = all keys. RUN=runs/<id> picks a model.
+  start/2_results_dashboard.command    data visualiser: rebuilds runs/dashboard.html and opens it (metrics only).
+  start/3_run_training.command         RUN TRAINING ("run training" to Claude): 3 new seeds of the current best
+                                       config (the auto-improve base), or a queue file you pass, one at a time,
+                                       Mac kept awake, live log in the window. Ctrl+C or closing the window stops
+                                       watching, not training. LID_CLOSED=1 also switches macOS sleep off (your
+                                       password) until the queue ends, so the lid can be closed.
+  start/4_run_external.command             RUN EXTERNAL ("run project external" to Claude): sleep off for the lid (password;
+                                       back on when done or after 3 h), results dashboard, the model on
+                                       "external scan" (3 graphs in Preview; redraw: scripts/external_graphs.py), and
+                                       the scan in the grading window at http://127.0.0.1:8766 (grades go to
+                                       external scan/results/reviews.csv). Takes a DICOM download, or (approximately)
+                                       a PNG export with one folder per series; then put the field of view in
+                                       external scan/fov_mm.txt. Not part of the submission.
+  Command list: start/training_commands.txt. Functions each command runs: start/command_functions.txt.
 
 1. EXPERIMENTS (the head trained on cached features, 5 folds, fixed seed)
 ------------------------------------------------------------------------

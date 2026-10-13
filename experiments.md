@@ -161,3 +161,4 @@ so a single-seed report difference under ~0.004 is not a result; confirm with a 
 | 2026-10-10 | 20261010-213841 | S3 | ensemble member: current best config, seed 83 | 0.7466 | 0.8002 | Synovitis 0.539, Medial Meniscus 0.548, Lateral Meniscus 0.689 | train 44.9 min (mps) | folds 0,1,2,3,4, 28 ep |
 | 2026-10-12 | 20261012-164015 | S3 | ensemble member: current best config, seed 84 | 0.753 | 0.798 | MCL 0.546, Synovitis 0.552, Medial Meniscus 0.621 | train 56.0 min (mps) | folds 0,1,2,3,4, 28 ep |
 | 2026-10-12 | 20261012-173621 | S3 | ensemble member: current best config, seed 85 | 0.7399 | 0.7974 | Synovitis 0.520, Medial Meniscus 0.608, MCL 0.651 | train 72.1 min (mps) | folds 0,1,2,3,4, 28 ep |
+| 2026-10-12 | 20261012-184833 | S3 | ensemble member: current best config, seed 86 | 0.7451 | 0.8009 | Synovitis 0.490, Medial Meniscus 0.602, MCL 0.653 | train 50.9 min (mps) | folds 0,1,2,3,4, 28 ep |

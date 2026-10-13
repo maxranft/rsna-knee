@@ -1,5 +1,5 @@
 #!/bin/bash
-# RUN PROJECT EXTERNAL ("run project external" to Claude): everything for the real-world scan in "external scan/".
+# RUN EXTERNAL ("run project external" or "run external" to Claude): everything for the real-world scan in "external scan/".
 #   1. the results dashboard (start/2_results_dashboard.command), rebuilt and opened in the browser
 #   2. the model on the scan (scripts/external_study.py): reads "external scan/dicom/", opens three graphs in Preview
 #   3. the grading window for the scan (scripts/review.py --external) at http://127.0.0.1:8766, run from this window
@@ -11,8 +11,8 @@
 # keep the Mac awake in a bag. A running training queue that needs sleep off keeps it off (scripts/keep_awake.sh).
 # Desk only, ideally plugged in. By hand: sudo pmset -a disablesleep 0
 #
-#   start/6_run_project_external.command                      # "external scan"
-#   SCAN="other data" start/6_run_project_external.command    # another folder with the same layout
+#   start/4_run_external.command                      # "external scan"
+#   SCAN="other data" start/4_run_external.command    # another folder with the same layout
 cd "$(dirname "$0")/.." || exit 1
 SCAN="${SCAN:-external scan}"
 pmset -g batt | grep -q "AC Power" || echo "On battery: with the lid closed the Mac stays awake and uses power. Plugging in is better."

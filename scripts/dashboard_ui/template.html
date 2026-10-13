@@ -151,6 +151,8 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
         <label class="controls">Compare with <select id="cmpSel"></select></label>
       </div>
       <div id="curves"></div>
+      <h3 style="margin-top:16px">Delta: AUC gained per epoch</h3><p class="note" id="greeksNote"></p>
+      <div id="deltaCurves"></div>
     </div>
     <div class="card scroll" style="margin-top:16px">
       <h3>Configs across seeds</h3><p class="note" id="configsNote"></p>
@@ -165,6 +167,13 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
       <span class="seg" role="group" aria-label="Metric"><button data-heat="report" aria-pressed="true">Report</button><button data-heat="gold">Gold</button></span>
     </div>
     <div class="card scroll"><div id="heat"></div></div>
+    <div class="card" style="margin-top:16px">
+      <h3>Label beta</h3><p class="note" id="betaNote"></p>
+      <div class="grid2" style="margin-top:12px">
+        <div><h3>Model beta</h3><p class="note">A label's report AUC against the other 11 labels. The line marks 1.</p><div id="betaModel"></div></div>
+        <div><h3>Transfer beta</h3><p class="note">A label's gold AUC against its own report AUC. The line marks 0.</p><div id="betaTransfer"></div></div>
+      </div>
+    </div>
   </section>
 
   <section id="reference">
@@ -239,6 +248,7 @@ const f3 = v => v == null ? "–" : v.toFixed(3);
 const f4 = v => v == null ? "–" : v.toFixed(4);
 const pct = v => v == null ? "–" : (100 * v).toFixed(1) + "%";
 const sg = (v, d = 3) => v == null ? "–" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d);
+const sg0 = (v, d = 4) => v != null && Math.abs(v) < 0.5 * Math.pow(10, -d) ? (0).toFixed(d) : sg(v, d);  // no signed zero
 const int = v => v == null ? "–" : Math.round(v).toLocaleString("en-US");
 const compact = v => v == null ? "–" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e4 ? (v / 1e3).toFixed(0) + "K" : int(v);
 const lin = (d0, d1, r0, r1) => v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0);
@@ -511,7 +521,7 @@ function renderLive() {
   const box = $("#liveBox"); box.replaceChildren();
   if (!running.length) {
     const c = H("div", { class: "card" }, box);
-    H("p", { class: "note" }, c, "No run in progress. Queue the next one with runs/queue*.sh (see runbook.txt).");
+    H("p", { class: "note" }, c, "No run in progress. Start one with start/3_run_training.command.");
     return;
   }
   for (const r of running) {
@@ -526,6 +536,9 @@ function renderLive() {
     tile("Progress", `${r.progress[0]} / ${r.progress[1]}`, `fold ${last.fold ?? "?"} · epoch ${last.epoch ?? "?"}`);
     tile("Latest val AUC", f3(last.val_macro_auc), "report labels, this fold");
     tile("Time left", r.eta_min != null ? `${r.eta_min} min` : "?", "from the average epoch so far");
+    const now = (r.greeks || {}).now || [];
+    tile("Delta", sg0(now[0]), "AUC gained per epoch, this fold, last 3 epochs");
+    tile("Gamma", sg0(now[1]), "change in delta per epoch");
     const cv = H("div", {}, right);
     lineChart(cv, { series: [
         { name: "Reference " + ref.id, color: "--s1", pts: foldMean(ref.history) },
@@ -560,12 +573,18 @@ function renderRuns() {
     const series = [{ name: `Reference ${ref.id}`, color: "--s1", pts: foldMean(ref.history), faint: foldLines(ref.history) }];
     if (other) series.push({ name: short(other.change, 50), color: "--s2", pts: foldMean(other.history), faint: foldLines(other.history) });
     lineChart($("#curves"), { series, integerX: true, xName: "epoch", xLabel: "epoch", aria: "Learning curves" });
+    const shown = [ref].concat(other ? [other] : []), last = a => a && a.length ? a[a.length - 1] : null;
+    lineChart($("#deltaCurves"), { series: shown.map((r, i) => ({ name: series[i].name, color: series[i].color, pts: ((r.greeks || {}).delta || []).map((v, e) => [e + 2, v]) })),
+      integerX: true, xName: "epoch", xLabel: "epoch", height: 200, yFmt: v => sg(v, 3), aria: "Validation AUC gained per epoch" });
+    const say = (r, i) => { const g = r.greeks || {};
+      return `${i ? "Compared run" : "Reference"}: ${g.flat ? `flat from epoch ${g.flat} of ${g.delta.length + 1}` : "not flat yet"}, delta ${sg0(last(g.delta))} and gamma ${sg0(last(g.gamma))} at the end`; };
+    $("#greeksNote").textContent = `Named after the options Greeks. Delta is the validation AUC gained per epoch (mean over the folds, 3-epoch mean); gamma is how fast delta is changing. Flat means delta stays below ${D.flat} per epoch. The learning rate falls to zero by the last epoch, so every run ends flat; what differs is how early. ${shown.map(say).join(". ")}.`;
   };
   sel.onchange = drawCurves; drawCurves();
   // leaderboard
   const box = $("#board"); box.replaceChildren();
   const t = H("table", {}, box), hd = H("tr", {}, H("thead", {}, t));
-  for (const [c, num] of [["Verdict"], ["Run"], ["Change"], ["Gold", 1], ["Δ gold (90% CI)", 1], ["Report", 1], ["Δ report (90% CI)", 1], ["P(better)", 1], ["Train min", 1], ["Head params", 1], ["Features"], ["Seed", 1]])
+  for (const [c, num] of [["Verdict"], ["Run"], ["Change"], ["Gold", 1], ["Δ gold (90% CI)", 1], ["Report", 1], ["Δ report (90% CI)", 1], ["P(better)", 1], ["Flat from epoch", 1], ["Train min", 1], ["Head params", 1], ["Features"], ["Seed", 1]])
     H("th", num ? { class: "num" } : {}, hd, c);
   const tb = H("tbody", {}, t);
   for (const r of D.runs.slice().reverse()) {
@@ -580,6 +599,7 @@ function renderRuns() {
     H("td", { class: "num" }, tr, f4(r.report));
     H("td", { class: "num" }, tr, dr ? `${sg(dr.diff)} [${sg(dr.lo)}, ${sg(dr.hi)}]` : r.id === ref.id ? "reference" : "–");
     H("td", { class: "num" }, tr, dr ? dr.p_better.toFixed(2) : "–");
+    H("td", { class: "num" }, tr, r.greeks && r.greeks.flat ? `${r.greeks.flat} / ${r.greeks.delta.length + 1}` : "–");
     H("td", { class: "num" }, tr, r.minutes != null ? r.minutes.toFixed(1) : "–");
     H("td", { class: "num" }, tr, compact(r.params));
     H("td", {}, tr, [r.feats, r.canon ? "canon" : "", r.slice_drop ? `slice-drop ${r.slice_drop}` : "", r.epochs && r.epochs !== 12 ? `${r.epochs} ep` : ""].filter(Boolean).join(" · "));
@@ -606,6 +626,22 @@ function renderConfigs() {
       if (!r.is_base) { const c = divColor(m.cliff, 1); td.style.background = c.bg; td.style.color = c.fg; }
     }
   }
+}
+
+function renderBetas() {
+  const B = D.betas, note = $("#betaNote");
+  $("#betaModel").replaceChildren(); $("#betaTransfer").replaceChildren();
+  if (!B) { note.textContent = "Not enough configs yet to measure betas."; return; }
+  note.textContent = `Beta is the market measure of how much one thing moves when another moves by 1, measured here across ${B.n} configs (one point per config: the mean of its seeds). Model beta above 1: the label gains more than the others from a better model; below 1: it barely responds. Transfer beta near 1: gains on the report labels are real; an interval that reaches 0: they have not shown up on gold, so that label's report rule needs work rather than the model. Lines are 90% bootstrap intervals.`;
+  const plot = (box, vals, cats, line, name) => {
+    const v = Object.fromEntries(cats.map(c => [c, vals[c][0]])), ci = Object.fromEntries(cats.map(c => [c, vals[c].slice(1)]));
+    const lo = Math.min(line, ...cats.map(c => vals[c][1])), hi = Math.max(line, ...cats.map(c => vals[c][2]));
+    dotPlot($(box), { cats, refLine: { v: line }, domain: [Math.floor(lo * 2) / 2, Math.ceil(hi * 2) / 2], tickFmt: t => t.toFixed(1), bold: ["Macro"],
+      series: [{ name, values: v, ci, color: "--s1" }], endLabel: c => sg(v[c], 2),
+      tip: c => [{ color: "var(--s1)", value: `${sg(v[c], 2)} [${sg(ci[c][0], 2)}, ${sg(ci[c][1], 2)}]`, label: `${name}, 90% interval` }], aria: `${name} per label` });
+  };
+  plot("#betaModel", B.model, LABELS.filter(l => B.model[l]), 1, "model beta");
+  plot("#betaTransfer", B.transfer, ["Macro"].concat(LABELS.filter(l => B.transfer[l])), 0, "transfer beta");
 }
 
 let heatMetric = "report";
@@ -764,7 +800,7 @@ function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
   document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto"))));
 }
-function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderHeat(); renderReference(); renderData(); renderEfficiency(); }
+function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderHeat(); renderBetas(); renderReference(); renderData(); renderEfficiency(); }
 applyTheme(store.get("theme") || "auto");
 document.querySelectorAll("[data-theme-set]").forEach(b => b.addEventListener("click", () => { store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet); renderAll(); }));
 document.querySelectorAll("[data-heat]").forEach(b => b.addEventListener("click", () => {
