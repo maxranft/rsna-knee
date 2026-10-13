@@ -104,6 +104,8 @@ src/knee/dashboard.py
   configs_section()     compare every config with the current best, seed by seed; differs() inside it words how
                         a config differs from the best
   boot_cliff()          Cliff's delta with a 90% interval
+  welch()               Welch's 90% interval for the difference between two configs' mean AUC (the forest plot)
+  differs()             word how a config differs from the current best
   betas_section()       betas across configs: each label against the other labels (report), and gold against
                         report for each label and for the macro
   beta(), boot_beta()   beta = covariance / variance (how much one score moves when another moves by 1), and

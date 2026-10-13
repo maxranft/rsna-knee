@@ -158,6 +158,19 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
       <h3>Configs across seeds</h3><p class="note" id="configsNote"></p>
       <div id="configs" style="margin-top:8px"></div>
     </div>
+    <div class="card" style="margin-top:16px">
+      <h3>Forest plot: each config against the current best</h3>
+      <p class="note">The standard figure of clinical trials and meta-analyses. Dot = difference in mean macro AUC from the current best config; line = Welch's 90% interval (the t-interval for two small samples with unequal variances). An interval that crosses the line at 0 means no demonstrated difference.</p>
+      <div class="grid2" style="margin-top:12px">
+        <div><h3>Report macro AUC</h3><div id="forestReport"></div></div>
+        <div><h3>Gold macro AUC</h3><div id="forestGold"></div></div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>Characteristic line: gold against report</h3><p class="note" id="capmNote"></p><div id="capm"></div></div>
+      <div class="card"><h3>Control chart: current best config, seed by seed</h3><p class="note" id="controlNote"></p>
+        <div id="controlReport"></div><div id="controlGold"></div></div>
+    </div>
     <div class="card scroll" style="margin-top:16px"><div id="board"></div></div>
   </section>
 
@@ -453,6 +466,26 @@ function lineChart(box, o) {
   hit.addEventListener("focus", () => show(at(xsAll[xsAll.length - 1]), xsAll[xsAll.length - 1]));
   hit.addEventListener("blur", () => { cross.style.display = "none"; hideTip(); });
 }
+// Scatter of points {x, y, r, color, title, rows} with an optional fitted line {slope, intercept}.
+function scatter(box, o) {
+  box.replaceChildren();
+  if (o.legend) legend(box, o.legend);
+  const W = Math.max(160, box.clientWidth), Hh = o.height || 300, L = 48, R = 16, T = 8, B = 34;
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, role: "img", "aria-label": o.aria || "" }, box);
+  const pad = (a, f = 0.06) => { const lo = Math.min(...a), hi = Math.max(...a), m = (hi - lo || 0.01) * f; return [lo - m, hi + m]; };
+  const xd = pad(o.points.map(p => p.x)), yd = pad(o.points.map(p => p.y));
+  const x = lin(xd[0], xd[1], L, W - R), y = lin(yd[0], yd[1], Hh - B, T);
+  for (const t of niceTicks(yd[0], yd[1], 5)) { S("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), class: "grid" }, s); S("text", { x: L - 6, y: y(t) + 4, class: "tick", "text-anchor": "end" }, s).textContent = t.toFixed(2); }
+  for (const t of niceTicks(xd[0], xd[1], 5)) { S("line", { x1: x(t), x2: x(t), y1: T, y2: Hh - B, class: "grid" }, s); S("text", { x: x(t), y: Hh - B + 16, class: "tick", "text-anchor": "middle" }, s).textContent = t.toFixed(2); }
+  S("text", { x: W - R, y: Hh - 2, class: "tick", "text-anchor": "end" }, s).textContent = o.xLabel || "";
+  S("text", { x: L, y: T + 4, class: "tick" }, s).textContent = o.yLabel || "";
+  if (o.line) S("line", { x1: x(xd[0]), x2: x(xd[1]), y1: y(o.line.intercept + o.line.slope * xd[0]), y2: y(o.line.intercept + o.line.slope * xd[1]), class: "line", style: "stroke:var(--s2)" }, s);
+  for (const p of o.points.slice().sort((a, b) => b.r - a.r)) {
+    const c = S("circle", { cx: x(p.x), cy: y(p.y), r: p.r, class: "dot", style: `fill:var(${p.color});cursor:default` }, s);
+    bindTip(c, ev => showTip(ev, p.title, p.rows));
+  }
+}
+
 function interp(pts, xv) {
   for (let i = 1; i < pts.length; i++) if (pts[i][0] >= xv) {
     const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
@@ -644,6 +677,46 @@ function renderBetas() {
   plot("#betaTransfer", B.transfer, ["Macro"].concat(LABELS.filter(l => B.transfer[l])), 0, "transfer beta");
 }
 
+function renderModels() {
+  const C = D.configs || { rows: [], base_runs: [] }, B = D.betas;
+  // forest plot: difference in mean macro AUC with Welch's 90% interval
+  for (const [box, key] of [["#forestReport", "report"], ["#forestGold", "gold"]]) {
+    const rows = C.rows.filter(r => !r.is_base && r[key].diff), cats = rows.map((r, i) => String(i));
+    if (!rows.length) { $(box).replaceChildren(); H("p", { class: "note" }, $(box), "No config has enough seeds yet."); continue; }
+    const v = Object.fromEntries(rows.map((r, i) => [i, r[key].diff[0]])), ci = Object.fromEntries(rows.map((r, i) => [i, r[key].diff.slice(1)]));
+    const lo = Math.min(0, ...rows.map(r => r[key].diff[1])), hi = Math.max(0, ...rows.map(r => r[key].diff[2])), step = key === "gold" ? 0.01 : 0.005;
+    dotPlot($(box), { cats, catName: c => `${rows[c].desc} (${rows[c].n})`, labelW: 230, refLine: { v: 0 }, right: 60,
+      domain: [Math.floor(lo / step) * step, Math.ceil(hi / step) * step], tickFmt: t => sg0(t, 3),
+      series: [{ name: key, values: v, ci, colorOf: c => ci[c][0] > 0 || ci[c][1] < 0 ? "--s1" : "--deemph" }], endLabel: c => sg(v[c], 4),
+      tip: c => [{ color: "var(--s1)", value: `${sg(v[c], 4)} [${sg(ci[c][0], 4)}, ${sg(ci[c][1], 4)}]`, label: `${key} macro AUC against the current best, Welch 90% interval · ${rows[c].n} seeds` }],
+      legend: [{ name: "Interval clear of 0", color: "--s1" }, { name: "Interval crosses 0", color: "--deemph" }], aria: `Forest plot of ${key} macro AUC differences` });
+  }
+  // characteristic line (CAPM): gold = alpha + beta * report, one point per config
+  if (B) {
+    const m = B.transfer.Macro;
+    $("#capmNote").textContent = `The capital asset pricing model's characteristic line, with report AUC as the market and gold AUC as the asset: gold = ${B.alpha.toFixed(3)} + ${m[0].toFixed(2)} × report across ${B.n} configs (beta 90% interval ${m[1].toFixed(2)} to ${m[2].toFixed(2)}, r = ${B.r.toFixed(2)}). A config above the line scores better on gold than its report score predicts. Dot size = seeds.`;
+    scatter($("#capm"), { xLabel: "report macro AUC", yLabel: "gold macro AUC", line: { slope: m[0], intercept: B.alpha }, aria: "Gold against report macro AUC per config with the fitted line",
+      legend: [{ name: "Current best config", color: "--s1" }, { name: "Other configs", color: "--deemph" }, { name: "Fitted line", color: "--s2", shape: "line" }],
+      points: B.points.map(p => ({ x: p.x, y: p.y, r: 3 + 1.5 * Math.sqrt(p.n), color: p.is_base ? "--s1" : "--deemph", title: `${p.desc} (${p.n} seed${p.n > 1 ? "s" : ""})`,
+        rows: [{ value: f4(p.y), label: "gold" }, { value: f4(p.x), label: "report" }, { value: sg(p.y - (B.alpha + m[0] * p.x), 4), label: "gold above the line (alpha)" }] })) });
+  } else { $("#capmNote").textContent = "Not enough configs yet."; $("#capm").replaceChildren(); }
+  // Shewhart individuals chart: sigma from the mean moving range, limits at 3 sigma
+  const base = C.base_runs.map(id => D.runs.find(r => r.id === id)).filter(r => r && r.gold != null && r.report != null);
+  $("#controlNote").textContent = base.length < 3 ? "Needs at least 3 seeds of the current best config." : `Shewhart's individuals chart from quality control, over the ${base.length} seeds in the order they were trained. Limits are the mean ± 3 sigma, with sigma estimated from the average change between consecutive seeds. A seed outside the limits, or a sustained drift, means something other than seed luck changed.`;
+  for (const [box, key] of [["#controlReport", "report"], ["#controlGold", "gold"]]) {
+    $(box).replaceChildren(); if (base.length < 3) continue;
+    const v = base.map(r => r[key]), mean = v.reduce((a, b) => a + b, 0) / v.length;
+    const sigma = v.slice(1).reduce((a, b, i) => a + Math.abs(b - v[i]), 0) / (v.length - 1) / 1.128, flat = c => v.map((_, i) => [i + 1, c]);
+    const out = v.filter(x => Math.abs(x - mean) > 3 * sigma).length;
+    H("h3", { style: "margin-top:12px" }, $(box), `${key === "gold" ? "Gold" : "Report"} macro AUC · mean ${f4(mean)}, sigma ${sigma.toFixed(4)}, ${out} outside the limits`);
+    lineChart(H("div", {}, $(box)), { height: 190, integerX: true, xName: "seed number in order", xLabel: "seed, in training order", yFmt: f4, noEndDot: true,
+      yDomain: [Math.min(mean - 3.6 * sigma, ...v), Math.max(mean + 3.6 * sigma, ...v)],
+      series: [{ name: `${key} macro AUC`, color: "--s1", pts: v.map((x, i) => [i + 1, x]) }, { name: "mean", color: "--deemph", pts: flat(mean) },
+               { name: "upper limit (+3 sigma)", color: "--s2", pts: flat(mean + 3 * sigma) }, { name: "lower limit (−3 sigma)", color: "--s2", pts: flat(mean - 3 * sigma) }],
+      aria: `Control chart of ${key} macro AUC` });
+  }
+}
+
 let heatMetric = "report";
 function divColor(d, scale) {
   const a = Math.max(-1, Math.min(1, d / scale)) * 0.8, lerp = (c1, c2, t) => c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
@@ -800,7 +873,7 @@ function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
   document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto"))));
 }
-function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderHeat(); renderBetas(); renderReference(); renderData(); renderEfficiency(); }
+function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderModels(); renderHeat(); renderBetas(); renderReference(); renderData(); renderEfficiency(); }
 applyTheme(store.get("theme") || "auto");
 document.querySelectorAll("[data-theme-set]").forEach(b => b.addEventListener("click", () => { store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet); renderAll(); }));
 document.querySelectorAll("[data-heat]").forEach(b => b.addEventListener("click", () => {

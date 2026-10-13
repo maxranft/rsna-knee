@@ -72,6 +72,22 @@ def boot_cliff(x, y, n=2000, seed=0):
     return cliff(x, y), float(lo), float(hi)
 
 
+def welch(x, y, level=0.90):
+    """Welch's interval for mean(x) - mean(y), the t-interval for two small samples with unequal variances:
+    [difference, lo, hi]; None when a sample has fewer than 2 values or nothing varies."""
+    from scipy.stats import t
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    if min(len(x), len(y)) < 2:
+        return None
+    vx, vy = x.var(ddof=1) / len(x), y.var(ddof=1) / len(y)
+    if vx + vy == 0:
+        return None
+    df = (vx + vy) ** 2 / (vx ** 2 / (len(x) - 1) + vy ** 2 / (len(y) - 1))
+    half = float(t.ppf(0.5 + level / 2, df) * np.sqrt(vx + vy))
+    d = float(x.mean() - y.mean())
+    return [d, d - half, d + half]
+
+
 def beta(y, x):
     """Beta of y on x, as in markets: cov(y, x) / var(x), how much y moves when x moves by 1."""
     c = np.cov(np.asarray(y, float), np.asarray(x, float))
@@ -242,42 +258,47 @@ def best_group(groups, ref):
     return next((g for a in anchors for g in groups if a in g["runs"]), None)
 
 
-def configs_section(runs, groups, base):
-    """Every config with enough seeds, compared seed by seed (Cliff's delta) with the current best config."""
-    if base is None:
-        return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": []}
+def differs(cfg, base_cfg):
+    """How a config differs from the base config, written like the train_head.py flags ("" if it does not)."""
+    out = []
+    for k in sorted(set(cfg) | set(base_cfg)):
+        v = cfg.get(k)
+        if v != base_cfg.get(k) and not (v is None and k in DEPENDS):  # "teacher off" already says it
+            out.append(k.replace("_", "-") + (" off" if v is None else " on" if v is True else
+                                              f" {Path(v).name}" if k in ("feats", "labels", "teacher", "canon") else f" {v}"))
+    return " · ".join(out)
 
-    def differs(cfg):  # how a config differs from the base, written like the train_head.py flags
-        out = []
-        for k in sorted(set(cfg) | set(base["config"])):
-            v = cfg.get(k)
-            if v != base["config"].get(k) and not (v is None and k in DEPENDS):  # "teacher off" already says it
-                out.append(k.replace("_", "-") + (" off" if v is None else " on" if v is True else
-                                                  f" {Path(v).name}" if k in ("feats", "labels", "teacher", "canon") else f" {v}"))
-        return " · ".join(out)
+
+def configs_section(runs, groups, base):
+    """Every config with enough seeds against the current best config: seed by seed (Cliff's delta) and as a difference
+    in mean macro AUC with Welch's 90% interval (the forest plot). base_runs: the current best config's runs in the
+    order they were trained (the control chart)."""
+    if base is None:
+        return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": [], "base_runs": []}
 
     rows = []
     for g in groups:
         if g is not base and len(g["runs"]) < MIN_SEEDS:
             continue
-        row = {"desc": differs(g["config"]) or "current best config", "is_base": g is base, "n": len(g["runs"]),
+        row = {"desc": differs(g["config"], base["config"]) or "current best config", "is_base": g is base, "n": len(g["runs"]),
                "first": g["runs"][0], "last": g["runs"][-1]}
         for k in ("report", "gold"):
             x, y = runs.loc[g["runs"], k].astype(float).values, runs.loc[base["runs"], k].astype(float).values
             row[k] = {"mean": float(x.mean()), "sd": float(x.std(ddof=1)) if len(x) > 1 else None}
             if g is not base:
                 d, lo, hi = boot_cliff(x, y)
-                row[k] |= {"cliff": d} | ({"lo": lo, "hi": hi} if min(len(x), len(y)) >= CI_SEEDS else {})
+                row[k] |= {"cliff": d, "diff": welch(x, y)} | ({"lo": lo, "hi": hi} if min(len(x), len(y)) >= CI_SEEDS else {})
         rows.append(row)
     rows.sort(key=lambda r: (not r["is_base"], -r["report"]["mean"]))
-    return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": rows}
+    return {"min_seeds": MIN_SEEDS, "ci_seeds": CI_SEEDS, "rows": rows, "base_runs": base["runs"]}
 
 
 def betas_section(runs, groups, base):
     """Betas across configs, one point per config (the mean over its seeds), for the configs trained on the current
     best config's labels. model: a label's report AUC against the mean report AUC of the other labels (which labels
     gain most from a better model). transfer: a label's gold AUC against its own report AUC, and the macro likewise
-    (whether gains on the report labels show up on gold). Each is [beta, lo, hi], a 90% bootstrap interval."""
+    (whether gains on the report labels show up on gold). Each is [beta, lo, hi], a 90% bootstrap interval. points,
+    alpha and the macro beta are the characteristic line of gold against report, as in the CAPM."""
     same = [g for g in groups if base and all(g["config"].get(k) == base["config"].get(k) for k in ("labels", "label_map"))]
     if len(same) < MIN_CONFIGS:
         return None
@@ -289,8 +310,11 @@ def betas_section(runs, groups, base):
         return np.array([runs.loc[g["runs"], col].astype(float).mean() for g in same])
 
     rep, gold = per_label("report_by_label"), per_label("gold_by_label")
-    out = {"n": len(same), "model": {}, "transfer": {"Macro": boot_beta(macro("gold"), macro("report"))},
-           "r": float(np.corrcoef(macro("gold"), macro("report"))[0, 1])}
+    mx, my = macro("report"), macro("gold")
+    out = {"n": len(same), "model": {}, "transfer": {"Macro": boot_beta(my, mx)}, "r": float(np.corrcoef(my, mx)[0, 1]),
+           "alpha": float(my.mean() - beta(my, mx) * mx.mean()),  # the characteristic line: gold = alpha + beta * report
+           "points": [{"x": float(a), "y": float(b), "n": len(g["runs"]), "is_base": g is base,
+                       "desc": differs(g["config"], base["config"]) or "current best config"} for g, a, b in zip(same, mx, my)]}
     for j, l in enumerate(R.LABELS):
         if not (np.isnan(rep[:, j]).any() or np.isnan(gold[:, j]).any()):
             out["model"][l] = boot_beta(rep[:, j], np.delete(rep, j, 1).mean(1))

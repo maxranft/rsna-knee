@@ -214,16 +214,7 @@ Two-seed comparison against the reference's seeds 42 and 43:
   -> each run, the seed means, a 2-run ensemble vs 2-run ensemble paired bootstrap, and per-label changes.
 Do not edit a queue file while it runs (bash reads it as it goes); stop it and start a new one instead.
 
-How to read an outcome, and what to do next:
-  - Seed noise first: one seed per config moves report macro by ~0.004 and gold by ~0.010. A single-seed difference
-    below that is not a result. Confirm a promising change with a second seed, or compare seed means.
-  - Report macro up by >= ~0.005, with a bootstrap 90% interval above 0 and gold not down by more than 0.02:
-      adopt the change and make it the new reference.
-  - Report macro flat (interval straddles 0): keep the change only if it is cheaper (e.g. E1: 3x smaller, 2x faster).
-  - Report macro down: reject. Keep the flag in the code, off by default.
-  - Left/right check (scripts/side_split.py): the one-sided findings (menisci, tibiofemoral OA, MCL, Baker's) should
-    score the same on left and right knees. E2 did not fix the MCL gap; the untested fix is a pixel-level flip of
-    left knees before the encoder (a new feature cache on Kaggle, ~15 min T4).
+
 
 Compare any two runs (per-label table + paired bootstrap):
   .venv/bin/python scripts/compare_runs.py runs/<reference> runs/<candidate>
