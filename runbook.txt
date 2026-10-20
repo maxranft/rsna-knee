@@ -226,6 +226,9 @@ Results dashboard (browser): .venv/bin/python scripts/dashboard.py --open   -> r
   -> overview, run in progress, every run with verdict and 90% CI vs the reference, per-label heat map, the reference
      model's per-label AUC + ROC curves + label ceiling + left/right split, the data, efficiency. Rebuilt automatically
      after every fold and run; the open page reloads each minute while training. Verdicts come from experiments.md.
+Graphs only (window + PNGs): .venv/bin/python scripts/graphs.py --open   (or start/5_graphs.command)
+  -> every dashboard chart as graphs/NN-<chart>.png (graphs/README.md shows them all in VS Code's Markdown preview) and
+     a window with the charts alone (runs/dashboard.html?graphs, Chrome app mode). ~15 s. The PNGs are a snapshot.
 Results viewer (VS Code): open notebooks/results.ipynb, pick the .venv kernel, Run All.
   -> live runs + learning curves, leaderboard, per-label tables, baseline vs candidate, knee-side split.
 Ensemble runs (rank-average of out-of-fold predictions, scored like a run, row appended to experiments.md):
@@ -279,7 +282,10 @@ rsna-knee-assets                   CPU    Saves the encoder weights for the offl
     .venv/bin/kaggle datasets create -p build/rsna-knee-heads            (first upload; later: datasets version)
 
 rsna-knee-submit                   GPU    Offline submission: test DICOM -> stacks -> encoder -> every fold head.
-                                          Outcome: NOT SUBMITTED YET ("No submissions found", 2026-09-29).
+                                          Outcome: version 1 pushed 2026-10-14 with the accurate package
+                                          (mix-20261006-114310, 160 heads + TTA + rank mix): 3 example studies,
+                                          0 errors, 0.53 min. Max submitted v1 (twice, 2026-10-14 17:42 and 17:44):
+                                          PUBLIC LB 0.796 (CV gold 0.771, report 0.803). Not selected as final yet.
                                           Needs the fold heads uploaded as dataset maxranft/rsna-knee-heads.
                                           The kernel applies pca.npz itself (tested locally 2026-09-29) and averages
                                           all heads it finds. It does not implement --canon runs.

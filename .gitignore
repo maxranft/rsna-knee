@@ -11,3 +11,4 @@ build/
 runs/
 # real-world scans from outside the competition (identifiable patient data): never commit
 external scan/
+graphs/

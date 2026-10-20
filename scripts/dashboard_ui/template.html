@@ -112,6 +112,35 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
 #tip .tt-val { font-weight: 600; font-variant-numeric: tabular-nums; }
 #tip .tt-lab { color: var(--text2); white-space: normal; }
 .stale { color: var(--crit); }
+svg.g3 { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; border-radius: 8px; }
+svg.g3.drag { cursor: grabbing; }
+svg.g3:focus { outline: none; }
+svg.g3:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+svg.g3 .pane { fill: var(--wash); }
+svg.g3 .front { opacity: 0.5; }
+svg.g3 .casing { stroke: var(--muted); stroke-width: 4.5; stroke-linecap: round; }
+svg.g3 .seg3 { stroke-width: 2.5; stroke-linecap: round; }
+svg.g3 .stem { stroke: var(--text2); stroke-width: 1; opacity: 0.7; }
+svg.g3 .drop { stroke: var(--axis); stroke-width: 1; }
+svg.g3 .shadow { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; opacity: 0.8; }
+svg.g3 .other { fill: none; stroke: var(--deemph); stroke-width: 1; stroke-linejoin: round; opacity: 0.6; }
+svg.g3 .mark { stroke: var(--muted); stroke-width: 1; }
+svg.g3 .mesh { stroke: var(--s2); stroke-width: 1; opacity: 0.55; }
+svg.g3 .sheet { fill: var(--s2); opacity: 0.08; }
+svg.g3 .hit:focus-visible { outline: 2px solid var(--s1); }
+.legend .ramp { display: inline-block; width: 96px; height: 10px; border-radius: 2px; margin: 0 6px; vertical-align: -1px; border: 1px solid var(--border); }
+/* Graphs view (dashboard.html?graphs): the charts alone, one card each. &export is the variant scripts/graphs.py saves as PNGs. */
+html.graphs .wrap { max-width: 1600px; }
+html.graphs .wrap > section, html.graphs nav.toc, html.graphs #sub, html.graphs header.top .controls { display: none; }
+#gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; align-items: start; }
+#gallery > h2 { grid-column: 1 / -1; margin: 16px 0 -4px; }
+#gallery .wide { grid-column: 1 / -1; }
+#gallery .ghead { display: flex; justify-content: space-between; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 8px; }
+#gallery .note, #gallery .tiles, #gallery .meter { display: none; }
+#gallery .card .card { border: 0; padding: 0; background: none; }
+#gallery #liveBox .grid2 { grid-template-columns: minmax(0, 1fr); }
+html.export .gctl { display: none; }
+html.export #gallery .scroll { overflow: visible; width: max-content; min-width: 100%; }
 </style>
 </head>
 <body>
@@ -153,6 +182,20 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
       <div id="curves"></div>
       <h3 style="margin-top:16px">Delta: AUC gained per epoch</h3><p class="note" id="greeksNote"></p>
       <div id="deltaCurves"></div>
+    </div>
+    <div class="card" id="greeks3d" style="margin-top:16px">
+      <div style="display:flex;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;align-items:center">
+        <h3>Delta, gamma and beta in 3D</h3>
+        <div class="controls" style="min-width:0;max-width:100%">
+          <span class="seg" role="group" aria-label="3D view"><button data-g3="delta" aria-pressed="true">Delta</button><button data-g3="gamma" aria-pressed="false">Gamma</button><button data-g3="beta" aria-pressed="false">Beta</button></span>
+          <label class="controls" id="g3RunLab">Run <select id="g3Run"></select></label>
+          <button id="g3Reset">Reset view</button>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:8px;align-items:start">
+        <div><p class="note" id="g3Note"></p><div id="g3Legend" style="margin-top:8px"></div></div>
+        <div id="g3Box"></div>
+      </div>
     </div>
     <div class="card scroll" style="margin-top:16px">
       <h3>Configs across seeds</h3><p class="note" id="configsNote"></p>
@@ -197,7 +240,7 @@ details .notes { color: var(--text2); font-size: 12px; margin-top: 4px; max-widt
     </div>
     <div class="card" style="margin-top:16px">
       <h3>ROC curves</h3>
-      <div class="legend"><span><span class="k line" style="background:var(--s1)"></span>Report labels (4,349 studies)</span><span><span class="k line" style="background:var(--s2)"></span>Gold labels (58 studies)</span></div>
+      <div class="legend" id="rocLegend"><span><span class="k line" style="background:var(--s1)"></span>Report labels (4,349 studies)</span><span><span class="k line" style="background:var(--s2)"></span>Gold labels (58 studies)</span></div>
       <div class="rocgrid" id="roc"></div>
     </div>
     <div class="grid2" style="margin-top:16px">
@@ -494,6 +537,137 @@ function interp(pts, xv) {
   return pts.length ? pts[pts.length - 1][1] : null;
 }
 
+// A domain that starts and ends on a tick: {d: [min, max], ticks, fmt}.
+function niceDomain(vals, n = 4) {
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (!(hi > lo)) { const m = Math.abs(lo) * 0.01 || 0.01; lo -= m; hi += m; }
+  let t = niceTicks(lo, hi, n); while (t.length < 2) t = niceTicks(lo, hi, ++n);
+  const step = t[1] - t[0], i0 = Math.floor(lo / step + 1e-9), ticks = [];
+  for (let i = i0; (i - 1) * step < hi - step * 1e-9; i++) ticks.push(+(i * step).toFixed(10));
+  const dec = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+  return { d: [ticks[0], ticks[ticks.length - 1]], ticks, fmt: v => v.toFixed(dec) };
+}
+
+// Orthographic 3D in plain SVG, no library. Data is scaled into a box centred on 0 (x across, y into the page, z up), turned
+// by yaw about the vertical, tilted by pitch and painted back to front. o.axes = [x, y, z], each {name, d: [min, max], ticks,
+// fmt}; o.items = [{kind: "line" | "path" | "poly" | "dot" | "text", p: points in data units, cls, style, r, text, tip, layer}].
+// Drag or the arrow keys turn the box; the angles live in g3, so they survive re-renders and the reload during training.
+const G3_HOME = { yaw: -0.6, pitch: 0.42 }, g3 = Object.assign({ view: "", run: "" }, G3_HOME);  // "" = not chosen yet
+try { Object.assign(g3, JSON.parse(sessionStorage.getItem("dash3d") || "{}")); } catch (e) {}
+if (!["delta", "gamma", "beta"].includes(g3.view)) g3.view = "";
+if (typeof g3.run !== "string") g3.run = "";
+for (const k in G3_HOME) if (!Number.isFinite(g3[k])) g3[k] = G3_HOME[k];
+const g3Save = () => { try { sessionStorage.setItem("dash3d", JSON.stringify(g3)); } catch (e) {} };
+let g3Draw = null;
+function chart3d(box, o) {
+  box.replaceChildren();
+  const W = Math.max(200, box.clientWidth), h = [1, 0.8, 0.7], rxy = Math.hypot(h[0], h[1]), R = Math.hypot(rxy, h[2]);
+  const k = Math.max(30, Math.min((W / 2 - 58) / rxy, 172 / R)), Hh = Math.round(2 * (k * R + 38));  // fixed scale: the box fits at every angle
+  const s = S("svg", { width: W, height: Hh, viewBox: `0 0 ${W} ${Hh}`, class: "g3", role: "img", tabindex: "0", "aria-label": o.aria || "" }, box);
+  const scene = S("g", {}, s), u = o.axes.map((a, i) => lin(a.d[0], a.d[1], -h[i], h[i]));
+  const xy = p => p[0].toFixed(1) + "," + p[1].toFixed(1);
+  const seg = (a, b, cls, style) => S("line", Object.assign({ x1: a[0].toFixed(1), y1: a[1].toFixed(1), x2: b[0].toFixed(1), y2: b[1].toFixed(1), class: cls }, style ? { style } : {}), scene);
+  let taken = [];
+  const wide = text => { measure.font = "12px system-ui, -apple-system, \"Segoe UI\", sans-serif"; return measure.measureText(text).width; };
+  const label = (x, y, text, anchor, cls, drop = 0, force = false) => {  // nudged back inside the svg (and down by drop), so a turned box never widens the page
+    const w = wide(text), x0 = anchor === "end" ? x - w : anchor === "middle" ? x - w / 2 : x, dx = Math.max(2 - x0, 0) + Math.min(W - 2 - x0 - w, 0);
+    const b = [x0 + dx, y + (Math.abs(dx) > 4 ? drop : 0) - 9, w, 10];
+    if (cls && !force && taken.some(t => b[0] < t[0] + t[2] && t[0] < b[0] + b[2] && b[1] - 3 < t[1] + t[3] && t[1] - 3 < b[1] + b[3])) return false;  // only an axis name (no class) never gives way; the others keep 3 px of air
+    taken.push(b);
+    S("text", { x: (x + dx).toFixed(1), y: (b[1] + 9).toFixed(1), class: cls, "text-anchor": anchor }, scene).textContent = text;
+    return true;
+  };
+  function draw() {
+    scene.replaceChildren(); taken = [];
+    const cy = Math.cos(g3.yaw), sy = Math.sin(g3.yaw), cp = Math.cos(g3.pitch), sp = Math.sin(g3.pitch);
+    const P = (x, y, z) => { const xr = x * cy - y * sy, yr = x * sy + y * cy; return [W / 2 + k * xr, Hh / 2 - k * (yr * sp + z * cp), z * sp - yr * cp]; };  // [screen x, screen y, nearness]
+    const at = (a, va, vb, vc) => { const p = [0, 0, 0]; p[a] = va; p[(a + 1) % 3] = vb; p[(a + 2) % 3] = vc; return P(p[0], p[1], p[2]); };
+    const back = [0, 1, 2].map(a => at(a, 1, 0, 0)[2] > 0 ? -1 : 1), front = [];  // back: the side of each axis that faces away
+    for (let a = 0; a < 3; a++) {  // the three walls behind the data, with a grid at the ticks
+      const b = (a + 1) % 3, c = (a + 2) % 3, va = back[a] * h[a];
+      S("polygon", { points: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => xy(at(a, va, i * h[b], j * h[c]))).join(" "), class: "pane" }, scene);
+      for (const t of o.axes[b].ticks) seg(at(a, va, u[b](t), -h[c]), at(a, va, u[b](t), h[c]), "grid");
+      for (const t of o.axes[c].ticks) seg(at(a, va, -h[b], u[c](t)), at(a, va, h[b], u[c](t)), "grid");
+    }
+    for (let a = 0; a < 3; a++) for (const i of [-1, 1]) for (const j of [-1, 1]) {  // the wireframe; the three nearest edges go on top
+      const b = (a + 1) % 3, c = (a + 2) % 3, e = [at(a, -h[a], i * h[b], j * h[c]), at(a, h[a], i * h[b], j * h[c])];
+      if (i === -back[b] && j === -back[c]) front.push(e); else seg(e[0], e[1], "axis");
+    }
+    const prims = o.items.map((it, i) => { const q = it.p.map(p => P(u[0](p[0]), u[1](p[1]), u[2](p[2])));
+      return { it, q, i, l: it.layer ?? 2, z: q.reduce((m, p) => m + p[2], 0) / q.length + (it.kind === "dot" ? 0.03 : 0) }; });
+    const painted = prims.slice().sort((m, n) => m.l - n.l || m.z - n.z || m.i - n.i);  // painter's algorithm
+    painted.forEach((pr, o) => { pr.o = o; });
+    for (const { it, q } of painted) {
+      const st = it.style ? { style: it.style } : {};
+      if (it.kind === "line") seg(q[0], q[1], it.cls, it.style);
+      else if (it.kind === "path") S("polyline", Object.assign({ points: q.map(xy).join(" "), class: it.cls }, st), scene);
+      else if (it.kind === "poly") S("polygon", Object.assign({ points: q.map(xy).join(" "), class: it.cls }, st), scene);
+      else if (it.kind === "text") continue;  // placed with the axis labels below
+      else S("circle", Object.assign({ cx: q[0][0].toFixed(1), cy: q[0][1].toFixed(1), r: it.r, class: it.cls }, st), scene);
+    }
+    for (const e of front) seg(e[0], e[1], "axis front");
+    const ctr = P(0, 0, 0);
+    const axis = (a, i, j, ticks) => {  // the name, or the ticks, along the edge of axis a at sides i, j of the other two
+      const b = (a + 1) % 3, c = (a + 2) % 3, A = o.axes[a], e = v => at(a, v, i * h[b], j * h[c]), e0 = e(-h[a]), e1 = e(h[a]), mid = e(0);
+      let dx = a === 2 ? -1 : mid[0] - ctr[0], dy = a === 2 ? 0 : mid[1] - ctr[1]; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+      const anchor = dx < -0.35 ? "end" : dx > 0.35 ? "start" : "middle", len = Math.hypot(e1[0] - e0[0], e1[1] - e0[1]), last = A.ticks.length - 1;
+      const all = len / Math.max(1, last) >= (a === 2 ? 16 : 38);
+      if (ticks) {  // a mark at every tick; labels from the two ends inward, so the scale keeps two even where an end label gives way
+        const put = t => { const p = e(u[a](t)); return label(p[0] + 9 * dx, p[1] + 9 * dy + 4 + 5 * dy, A.fmt(t), anchor, "tick"); };
+        for (const t of A.ticks) { const p = e(u[a](t)); seg(p, [p[0] + 4 * dx, p[1] + 4 * dy], "axis"); }
+        if (len < 14) return;
+        let lo = 0, hi = last;
+        while (lo <= last && !put(A.ticks[lo])) lo++;
+        while (hi > lo && !put(A.ticks[hi])) hi--;
+        if (all) for (let i = lo + 1; i < hi; i++) put(A.ticks[i]);
+        return;
+      }
+      if (a === 2) label(e1[0], e1[1] - 12, A.name, "middle", "");
+      else label(mid[0] + (30 + 12 * Math.abs(dx)) * dx, mid[1] + 30 * dy + 4 + 5 * dy, A.name, anchor, "", 16);
+    };
+    const left = [[back[0], -back[1]], [-back[0], back[1]]].sort((m, n) => at(2, 0, m[0] * h[0], m[1] * h[1])[0] - at(2, 0, n[0] * h[0], n[1] * h[1])[0])[0];
+    for (const ticks of [false, true]) {  // names first: where labels would collide, a tick label gives way
+      axis(0, -back[1], back[2], ticks); axis(1, back[2], -back[0], ticks);  // x and y along the near edges of the floor
+      axis(2, left[0], left[1], ticks);  // z on the upright edge at the left outline
+      if (!ticks) for (const { it, q } of painted) if (it.kind === "text") {  // a dot's label: where asked, or around the dot where it covers fewer dots, clear of the names
+        const [x, y] = q[0], w = wide(it.text), dots = painted.filter(pr => pr.it.kind === "dot").map(pr => pr.q[0]);
+        const cover = ([dx, dy, an]) => { const x0 = x + dx - (an === "end" ? w : an === "middle" ? w / 2 : 0); return dots.filter(d => d[0] > x0 - 4 && d[0] < x0 + w + 4 && d[1] > y + dy - 13 && d[1] < y + dy + 4).length; };
+        const tries = [[it.dx || 0, it.dy || 0, it.anchor || "start"], [0, -12, "middle"], [-9, -7, "end"], [0, 22, "middle"], [9, 13, "start"], [-9, 13, "end"]]
+          .map((t, n) => [cover(t), n, t]).sort((m, n) => m[0] - n[0] || m[1] - n[1]).map(t => t[2]);
+        const put = ([dx, dy, an], force) => label(x + dx, y + dy, it.text, an, "endlab", 0, force);
+        if (!tries.some(t => put(t, false))) put(tries[0], true);
+      }
+    }
+    // hit targets larger than the dots, on top and in data order for the keyboard. They overlap where dots sit close, so a
+    // pointer shows the dot whose centre is nearest, not the target that happens to lie on top; of dots on the same spot
+    // (within half a pixel), the one painted last, which is the one in view
+    const tips = prims.filter(pr => pr.it.tip);
+    for (const pr of tips) {
+      const c = S("circle", { cx: pr.q[0][0].toFixed(1), cy: pr.q[0][1].toFixed(1), r: Math.max(8, pr.it.r + 3), class: "hit" }, scene);
+      bindTip(c, ev => { if (ev.type !== "pointermove") return pr.it.tip(ev);
+        const b = s.getBoundingClientRect(), x = (ev.clientX - b.left) * W / (b.width || W), y = (ev.clientY - b.top) * Hh / (b.height || Hh);
+        const d = tips.map(t => Math.hypot(t.q[0][0] - x, t.q[0][1] - y)), lim = Math.min(...d) + 0.5;
+        tips.filter((t, i) => d[i] <= lim).reduce((m, t) => t.o > m.o ? t : m).it.tip(ev); });
+    }
+  }
+  let drag = null, raf = 0;
+  const turn = (dyaw, dpitch) => {
+    g3.yaw = (g3.yaw + dyaw) % (2 * Math.PI); g3.pitch = Math.max(0.05, Math.min(1.4, g3.pitch + dpitch));
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
+  };
+  s.addEventListener("pointerdown", ev => { if (ev.button) return; drag = [ev.clientX, ev.clientY]; try { s.setPointerCapture(ev.pointerId); } catch (e) {} s.classList.add("drag"); hideTip(); });
+  s.addEventListener("pointermove", ev => { if (!drag) return; hideTip(); turn((ev.clientX - drag[0]) * 0.01, (ev.clientY - drag[1]) * 0.01); drag = [ev.clientX, ev.clientY]; });
+  const end = () => { if (!drag) return; drag = null; s.classList.remove("drag"); g3Save(); };
+  s.addEventListener("pointerup", end); s.addEventListener("pointercancel", end);
+  s.addEventListener("keydown", ev => {
+    const m = { ArrowLeft: [-0.1, 0], ArrowRight: [0.1, 0], ArrowUp: [0, -0.1], ArrowDown: [0, 0.1] }[ev.key];
+    if (!m || ev.target !== s) return;
+    ev.preventDefault(); hideTip(); turn(m[0], m[1]); g3Save();
+  });
+  draw();
+  return draw;
+}
+
 // ------------------------------------------------------------------ data helpers
 const D = DATA, LABELS = D.labels;
 const ref = D.runs.find(r => r.id === D.reference);
@@ -638,6 +812,112 @@ function renderRuns() {
     H("td", {}, tr, [r.feats, r.canon ? "canon" : "", r.slice_drop ? `slice-drop ${r.slice_drop}` : "", r.epochs && r.epochs !== 12 ? `${r.epochs} ep` : ""].filter(Boolean).join(" · "));
     H("td", { class: "num" }, tr, r.seed ?? "–");
   }
+}
+
+// Delta, gamma and beta over time, AUC and accuracy. Delta and gamma: one run's path, a dot per epoch. Beta: one dot per
+// config with the fitted plane accuracy = alpha + beta_auc * AUC + beta_time * minutes.
+function render3d() {
+  const box = $("#g3Box"), leg = $("#g3Legend"), note = $("#g3Note"), sel = $("#g3Run");
+  // the level accuracy starts from: every finding is rare, so answering each one with its more common answer already scores this
+  const prev = LABELS.map(l => (((D.data || {}).prevalence || {})[l] || {}).report).filter(p => p != null);
+  const noSkill = prev.length ? prev.reduce((m, p) => m + Math.max(p, 1 - p), 0) / prev.length : null;
+  const ACC = "Accuracy is the share of calls on the right side of the 0.5 threshold against the report labels, mean over the 12 labels."
+    + (noSkill == null ? "" : ` ${prev.every(p => p <= 0.5) ? "Calling every finding absent" : "Giving every finding its more common answer"} would already score ${f3(noSkill)}, so read accuracy as the distance above that, not as a share out of 1.`)
+    + " It is a display metric: the competition scores AUC.";
+  const TURN = "Drag to turn the box, or focus it and use the arrow keys.";
+  const paths = D.runs.map(r => ({ r, pts: (r.path3d || []).filter(p => p[1] != null && p[2] != null) })).filter(x => x.pts.length);
+  const view = g3.view || (paths.length || !D.plane ? "delta" : "beta"), beta = view === "beta";  // until chosen: whichever has data
+  document.querySelectorAll("[data-g3]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.g3 === view)));
+  leg.replaceChildren(); $("#g3Reset").style.display = ""; $("#g3RunLab").style.display = beta || !paths.length ? "none" : "";
+  const empty = text => { g3Draw = null; box.replaceChildren(); H("p", { class: "note", style: "color:var(--text)" }, leg, text); $("#g3Reset").style.display = "none"; };
+  const lg = H("div", { class: "legend" }, leg);
+  const key = (name, color, shape) => { const e = H("span", {}, lg), k = H("span", { class: "k" + (shape ? " " + shape : "") }, e); k.style.background = `var(${color})`; e.appendChild(document.createTextNode(name)); };
+  if (beta) {
+    const pl = D.plane, pts = pl && pl.coef ? pl.points.filter(p => p.minutes != null && p.auc != null && p.acc != null) : [];
+    const head = "One dot per config (the mean of its seeds, dot size = seeds): training minutes across, report macro AUC into the page, accuracy up. Training minutes are the median epoch time × the epochs trained, so a run the Mac slept through or that was paused does not count as slow.";
+    if (pts.length < 3) { note.textContent = `${head} ${ACC}`; return empty("Not enough configs with an accuracy and a training time yet to fit the plane."); }
+    const c = pl.coef, f = (m, a) => c.alpha + c.beta_auc * a + c.beta_time * m, pm = v => v >= 0 ? "+" : "−";
+    const two = v => { const a = Math.abs(v); return a ? a.toFixed(Math.max(2, Math.min(8, 1 - Math.floor(Math.log10(a))))) : "0"; };  // two significant digits
+    // each beta with its 90% bootstrap interval over the configs, in the unit of the sentence (per 0.01 AUC, per hour); one that spans zero is said to
+    const ci = pl.ci || {}, iv = (k, m) => ci[k] ? `90% interval ${sg(ci[k][0] * m, 4)} to ${sg(ci[k][1] * m, 4)}` : "", zero = k => ci[k] && ci[k][0] <= 0 && ci[k][1] >= 0;
+    const also = (k, m) => ci[k] ? ` (${iv(k, m)})` : "";
+    const bAuc = zero("beta_auc") ? `Beta AUC: not distinguishable from zero (${iv("beta_auc", 0.01)} in accuracy per 0.01 AUC).`
+      : `Beta AUC: a config with 0.01 more AUC is ${sg(c.beta_auc * 0.01, 4)} in accuracy at equal training time${also("beta_auc", 0.01)}.`;
+    const bTime = zero("beta_time") ? `Beta time: not distinguishable from zero (${iv("beta_time", 60)} in accuracy per extra hour), so at equal AUC longer training has not gone with higher or lower accuracy.`
+      : `Beta time: an extra hour of training goes with ${sg(c.beta_time * 60, 4)} in accuracy at equal AUC${also("beta_time", 60)}.`;
+    note.textContent = `${head} The plane is a two-factor model, the market model with two betas: accuracy = ${c.alpha.toFixed(3)} ${pm(c.beta_auc)} ${two(c.beta_auc)} × AUC ${pm(c.beta_time)} ${two(c.beta_time)} × minutes across ${pl.n ?? pts.length} configs (r² = ${pl.r2 == null ? "–" : pl.r2.toFixed(2)}). ${bAuc} ${bTime} A stem joins each config to the plane, and a dot above the plane is more accurate than its AUC and time predict. ${ACC} ${TURN}`;
+    const ax = [["minutes", "training minutes"], ["auc", "report macro AUC"], ["acc", "accuracy"]].map(([kk, name]) => Object.assign(niceDomain(pts.map(p => p[kk])), { name }));
+    const [xd, yd, zd] = ax.map(a => a.d), N = 8, mix = (A, B, t) => A.map((v, i) => v + (B[i] - v) * t), inZ = v => Math.max(zd[0], Math.min(zd[1], v));
+    const clip = (A, B) => {  // the part of a segment inside the box's accuracy range
+      let t0 = 0, t1 = 1;
+      for (const [lim, sgn] of [[zd[0], 1], [zd[1], -1]]) {
+        const fa = sgn * (A[2] - lim), fb = sgn * (B[2] - lim);
+        if (fa < 0 && fb < 0) return null;
+        if (fa < 0) t0 = Math.max(t0, fa / (fa - fb)); else if (fb < 0) t1 = Math.min(t1, fa / (fa - fb));
+      }
+      return t0 < t1 ? [mix(A, B, t0), mix(A, B, t1)] : null;
+    };
+    const on = (i, j) => { const m = xd[0] + (xd[1] - xd[0]) * i / N, a = yd[0] + (yd[1] - yd[0]) * j / N; return [m, a, f(m, a)]; };
+    const items = [];
+    let sheet = [on(0, 0), on(N, 0), on(N, N), on(0, N)];
+    for (const [lim, sgn] of [[zd[0], 1], [zd[1], -1]]) {  // Sutherland–Hodgman against the floor and the ceiling
+      const out = [];
+      sheet.forEach((A, i) => { const B = sheet[(i + 1) % sheet.length], fa = sgn * (A[2] - lim), fb = sgn * (B[2] - lim);
+        if (fa >= 0) out.push(A); if (fa * fb < 0) out.push(mix(A, B, fa / (fa - fb))); });
+      sheet = out;
+    }
+    if (sheet.length > 2) items.push({ kind: "poly", layer: 1, cls: "sheet", p: sheet });
+    for (let i = 0; i <= N; i++) for (let j = 0; j < N; j++) for (const e of [clip(on(i, j), on(i, j + 1)), clip(on(j, i), on(j + 1, i))])
+      if (e) items.push({ kind: "line", cls: "mesh", p: e });
+    for (const p of pts) {
+      const fit_ = f(p.minutes, p.auc), q = [p.minutes, p.auc, p.acc], color = p.is_base ? "--s1" : "--deemph";
+      items.push({ kind: "line", cls: "stem", p: [q, [p.minutes, p.auc, inZ(fit_)]] });
+      items.push({ kind: "dot", cls: "dot", r: 3 + 1.5 * Math.sqrt(p.n || 1), style: `fill:var(${color})`, p: [q],
+        tip: ev => showTip(ev, `${p.desc} (${p.n} seed${p.n > 1 ? "s" : ""})`, [{ color: `var(${color})`, value: f4(p.acc), label: "accuracy" }, { value: f4(p.auc), label: "report macro AUC" },
+          { value: p.minutes.toFixed(1), label: "training minutes, pauses taken out" }, { value: sg(p.acc - fit_, 4), label: "accuracy above the plane" }]) });
+    }
+    key("Current best config", "--s1"); key("Other configs", "--deemph"); key("Fitted plane", "--s2", "line"); key("Distance from the plane", "--text2", "line");
+    g3Draw = chart3d(box, { axes: ax, items, aria: `Accuracy against training minutes and report macro AUC for ${pts.length} configs, with the fitted plane. Arrow keys turn the box.` });
+    return;
+  }
+  const delta = view === "delta", name = delta ? "delta" : "gamma", vi = delta ? 3 : 4;
+  const head = nOther => `One run's path through three measures, a dot per epoch: epoch across (time), validation macro AUC into the page, validation accuracy up. The path is the mean over the folds that reached each epoch. Colour is that epoch's ${name}, ${delta ? "the AUC gained per epoch: blue rising, grey flat, red falling" : "the change in delta per epoch: blue speeding up, grey steady, red slowing down"}. Delta is the gain within each fold, averaged over the folds as a 3-epoch mean, so a segment's colour can differ from the single step it is drawn on. The line on the floor is the path's shadow${nOther ? ", and the thin grey lines are other recent runs" : ""}.`;
+  if (!paths.length) { note.textContent = `${head(0)} ${ACC}`; return empty("Accuracy per epoch is recorded for runs trained from 13 October 2026. The first one appears here while it trains."); }
+  const auto_ = paths.find(x => x.r.status === "running") || paths[paths.length - 1], cur = paths.find(x => x.r.id === g3.run) || auto_;
+  sel.replaceChildren();
+  for (const x of paths.slice().reverse()) H("option", { value: x.r.id }, sel, `${x.r.id} · ${short(x.r.change, 50)}`);
+  sel.value = cur.r.id; sel.onchange = () => { g3.run = sel.value === auto_.r.id ? "" : sel.value; g3Save(); render3d(); };  // "" follows the newest run
+  const others = paths.filter(x => x !== cur).slice(-12), all = [cur].concat(others).flatMap(x => x.pts);
+  // an unfinished run is somewhere inside the path once its first fold is done: the marked dot is the epoch it is at, not the path's last one
+  const at = cur.r.status !== "done" && cur.r.last ? cur.r.last : null, ati = at ? cur.pts.findIndex(p => p[0] === at.epoch) : -1;
+  const mark = ati >= 0 ? ati : cur.pts.length - 1, here = cur.pts[mark];
+  const where = at ? `Run ${cur.r.id} ${cur.r.status === "running" ? "is training in" : "stopped in"} fold ${at.fold}, epoch ${at.epoch}. At epoch ${here[0]}, mean over the folds that got there` : `Run ${cur.r.id} at epoch ${here[0]}`;
+  note.textContent = `${head(others.length)} ${where}: AUC ${f4(here[1])}, accuracy ${f4(here[2])}, delta ${sg0(here[3])}, gamma ${sg0(here[4])}. ${ACC} ${TURN}`;
+  const nEp = Math.max(2, ...all.map(p => p[0])), et = niceTicks(1, nEp, Math.min(5, nEp - 1)).filter(Number.isInteger), gap = et.length > 1 ? (et[1] - et[0]) / 2 : 1;
+  const ax = [{ name: "epoch", d: [1, nEp], ticks: [1].concat(et.filter(t => t - 1 >= gap && nEp - t >= gap), [nEp]), fmt: String },
+    Object.assign(niceDomain(all.map(p => p[1])), { name: "validation AUC" }), Object.assign(niceDomain(all.map(p => p[2])), { name: "accuracy" })];
+  // colour scale from this run, robust to the first epochs: the 80th percentile of |value|, never finer than the flat threshold
+  const mags = cur.pts.map(p => p[vi]).filter(v => v != null).map(Math.abs).sort((a, b) => a - b);
+  const scale = Math.max(mags.length ? mags[Math.min(mags.length - 1, Math.floor(0.8 * mags.length))] : 0, (D.flat || 0.001) * (delta ? 2 : 0.5));
+  const col = v => v == null ? "var(--surface)" : divColor(v, scale).bg, cols = cur.pts.map(p => col(p[vi]));
+  const floor = ax[2].d[0], stride = Math.ceil(cur.pts.length / 14), items = [];
+  for (const x of others) items.push({ kind: "path", layer: 1, cls: "other", p: x.pts });
+  items.push({ kind: "path", layer: 1, cls: "shadow", p: cur.pts.map(p => [p[0], p[1], floor]) });
+  cur.pts.forEach((p, i) => {
+    const last = i === mark;  // the larger dot with the label
+    if (i) items.push({ kind: "line", cls: "casing", p: [cur.pts[i - 1], p] }, { kind: "line", cls: "seg3", style: `stroke:${cols[i]}`, p: [cur.pts[i - 1], p] });
+    if (i % stride === 0 || last) items.push({ kind: "line", cls: "drop", p: [p, [p[0], p[1], floor]] });
+    items.push({ kind: "dot", cls: "mark", r: last ? 5.5 : 3.5, style: `fill:${cols[i]}`, p: [p],
+      tip: ev => showTip(ev, `Epoch ${p[0]} · run ${cur.r.id}`, [{ value: f4(p[1]), label: "validation macro AUC" }, { value: f4(p[2]), label: "accuracy at the 0.5 threshold" },
+        { color: delta ? cols[i] : "", value: sg0(p[3]), label: "delta, AUC gained per epoch" }, { color: delta ? "" : cols[i], value: sg0(p[4]), label: "gamma, change in delta per epoch" }]) });
+    if (last) items.push({ kind: "text", layer: 3, p: [p], text: ati >= 0 ? `fold ${at.fold} · epoch ${p[0]}` : `epoch ${p[0]}`, dx: 9, dy: -7 });
+  });
+  const e = H("span", {}, lg); e.appendChild(document.createTextNode(`${delta ? "Delta" : "Gamma"} per epoch: ${sg(-scale, 4)} or less`));
+  H("span", { class: "ramp" }, e).style.background = `linear-gradient(90deg, ${col(-scale)}, ${col(0)}, ${col(scale)})`;
+  e.appendChild(document.createTextNode(`${sg(scale, 4)} or more`));
+  if (others.length) key("Other recent runs", "--deemph", "line");
+  key("Shadow on the floor", "--muted", "line");
+  g3Draw = chart3d(box, { axes: ax, items, aria: `Path of run ${cur.r.id} through epoch, validation macro AUC and accuracy, coloured by ${name}: ${cur.pts.length} epochs, ${at ? `marked at epoch ${here[0]} with` : "ending at"} AUC ${f3(here[1])} and accuracy ${f3(here[2])}. Arrow keys turn the box.` });
 }
 
 function renderConfigs() {
@@ -867,23 +1147,90 @@ function renderEfficiency() {
   H("p", { class: "note", style: "margin-top:8px" }, tb, "Training minutes include any time the Mac spent memory-bound or asleep (see the run notes). A head costs milliseconds per study; the encoder and DICOM reading dominate runtime.");
 }
 
+// ------------------------------------------------------------------ graphs view
+// dashboard.html?graphs: the charts alone, one card each, in the dashboard's order (scripts/graphs.py opens it in a window
+// of its own and saves each card of ?graphs&export as a PNG). The chart boxes move into the gallery with their ids, so every
+// render function above draws into them unchanged; the notes, tables and tiles stay behind in the hidden page.
+// variants: [file suffix, button to press] for a card that shows one of several views.
+const VIEW = new URLSearchParams(location.search), GALLERY = VIEW.has("graphs"), EXPORT = GALLERY && VIEW.has("export");
+const GRAPHS = [
+  ["Training now", [{ id: "training-now", title: "Training now: this run against the reference", boxes: ["#liveBox"], wide: true }]],
+  ["Runs", [
+    { id: "learning-curves", title: "Learning curves: validation macro AUC by epoch", boxes: ["#curves"], ctl: () => $("#cmpSel").closest("label"), wide: true },
+    { id: "delta-per-epoch", title: "Delta: AUC gained per epoch", boxes: ["#deltaCurves"], wide: true },
+    { id: "3d", title: "Delta, gamma and beta in 3D", boxes: ["#g3Legend", "#g3Box"], ctl: () => $("#greeks3d .controls"), wide: true,
+      variants: ["delta", "gamma", "beta"].map(v => [v, `[data-g3="${v}"]`]) },
+    { id: "runs-report", title: "Report macro AUC per run", boxes: ["#runsReport"] },
+    { id: "runs-gold", title: "Gold macro AUC per run", boxes: ["#runsGold"] },
+    { id: "forest-report", title: "Forest plot: report macro AUC against the current best config", boxes: ["#forestReport"] },
+    { id: "forest-gold", title: "Forest plot: gold macro AUC against the current best config", boxes: ["#forestGold"] },
+    { id: "characteristic-line", title: "Characteristic line: gold against report", boxes: ["#capm"] },
+    { id: "control-chart", title: "Control chart: current best config, seed by seed", boxes: ["#controlReport", "#controlGold"] }]],
+  ["Per label", [
+    { id: "heat-map", title: "AUC per label for every run, coloured by the difference from the reference", boxes: ["#heat"],
+      ctl: () => $("[data-heat]").parentElement, wide: true, scroll: true, variants: ["report", "gold"].map(v => [v, `[data-heat="${v}"]`]) },
+    { id: "model-beta", title: "Model beta per label", boxes: ["#betaModel"] },
+    { id: "transfer-beta", title: "Transfer beta per label", boxes: ["#betaTransfer"] }]],
+  ["Reference model", [
+    { id: "auc-per-label-report", title: "AUC per label, report labels (90% interval)", boxes: ["#ciReport"] },
+    { id: "auc-per-label-gold", title: "AUC per label, gold labels (90% interval)", boxes: ["#ciGold"] },
+    { id: "roc-curves", title: "ROC curves", boxes: ["#rocLegend", "#roc"], wide: true },
+    { id: "label-ceiling", title: "What limits each label", boxes: ["#ceiling"] },
+    { id: "knee-side", title: "Right vs left knee, report AUC", boxes: ["#side"] }]],
+  ["Data", [
+    { id: "label-prevalence", title: "Label prevalence", boxes: ["#prev"] },
+    { id: "series-slots", title: "Series slots: studies with each slot", boxes: ["#slots"] },
+    { id: "scanner-vendor", title: "Scanner vendor", boxes: ["#vendors"] },
+    { id: "field-strength", title: "Field strength", boxes: ["#field"] },
+    { id: "knee-side-sources", title: "Knee side sources", boxes: ["#lat"] }]],
+  ["Efficiency", [{ id: "submission-runtime", title: "Estimated submission runtime", boxes: ["#effBar"] }]],
+];
+if (GALLERY) {
+  document.documentElement.classList.add("graphs");
+  if (EXPORT) document.documentElement.classList.add("export");
+  document.title = "Knee Results Graphs";
+  $("header.top h1").textContent = "RSNA knee · graphs";
+  const gal = H("main", { id: "gallery" }, $(".wrap"));
+  for (const [section, cards] of GRAPHS) {
+    H("h2", {}, gal, section);
+    for (const g of cards) {
+      const card = H("div", { class: "card" + (g.wide ? " wide" : "") + (g.scroll ? " scroll" : ""), "data-graph": g.id, "data-title": g.title, "data-section": section }, gal);
+      if (g.variants) card.dataset.variants = JSON.stringify(g.variants);
+      const head = H("div", { class: "ghead" }, card);
+      H("h3", {}, head, g.title);
+      if (g.ctl) head.appendChild(g.ctl()).classList.add("gctl");
+      for (const b of g.boxes) card.appendChild($(b));
+    }
+  }
+}
+function tidyGallery() {  // hide a card with nothing drawn (no run training, too few seeds) and a section left empty
+  for (const c of document.querySelectorAll("#gallery [data-graph]")) c.hidden = !c.querySelector("svg, table");
+  for (const h of document.querySelectorAll("#gallery > h2")) {
+    let any = false;
+    for (let n = h.nextElementSibling; n && n.tagName !== "H2"; n = n.nextElementSibling) any = any || !n.hidden;
+    h.hidden = !any;
+  }
+}
+
 // ------------------------------------------------------------------ theme, refresh, layout
-const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+const store ={ get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
   document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto"))));
 }
-function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); renderConfigs(); renderModels(); renderHeat(); renderBetas(); renderReference(); renderData(); renderEfficiency(); }
-applyTheme(store.get("theme") || "auto");
+function renderAll() { renderHeader(); renderOverview(); renderLive(); renderRuns(); render3d(); renderConfigs(); renderModels(); renderHeat(); renderBetas(); renderReference(); renderData(); renderEfficiency(); if (GALLERY) tidyGallery(); }
+applyTheme(EXPORT ? "light" : store.get("theme") || "auto");
 document.querySelectorAll("[data-theme-set]").forEach(b => b.addEventListener("click", () => { store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet); renderAll(); }));
 document.querySelectorAll("[data-heat]").forEach(b => b.addEventListener("click", () => {
   heatMetric = b.dataset.heat; document.querySelectorAll("[data-heat]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderHeat(); }));
+document.querySelectorAll("[data-g3]").forEach(b => b.addEventListener("click", () => { g3.view = b.dataset.g3; g3Save(); render3d(); }));
+$("#g3Reset").addEventListener("click", () => { Object.assign(g3, G3_HOME); g3Save(); if (g3Draw) g3Draw(); });
 const auto = $("#auto");
-auto.checked = (store.get("auto") ?? "1") === "1";
+auto.checked = !EXPORT && (store.get("auto") ?? "1") === "1";
 auto.addEventListener("change", () => store.set("auto", auto.checked ? "1" : "0"));
 try { const y = sessionStorage.getItem("dashY"); if (y) { sessionStorage.removeItem("dashY"); addEventListener("load", () => scrollTo(0, +y)); } } catch (e) {}
 setInterval(() => { if (auto.checked && running.length) { try { sessionStorage.setItem("dashY", String(scrollY)); } catch (e) {} location.reload(); } }, 60000);
-let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
+let rt; if (!EXPORT) addEventListener("resize",() => { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
 renderAll();
 </script>

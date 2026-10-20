@@ -8,6 +8,7 @@ JavaScript inside the dashboard page and the grading page.
 --------------------------
 start/1_review_tool.command          -> scripts/review.py                                        (section 5)
 start/2_results_dashboard.command    -> scripts/dashboard.py --open                              (section 4)
+start/5_graphs.command               -> scripts/graphs.py --open (which runs scripts/dashboard.py --quiet first) (section 4)
 start/3_run_training.command         -> load_state() from scripts/auto_improve.py for the config, then
                                         scripts/train_head.py once per seed, then scripts/watch_training.sh;
                                         with LID_CLOSED=1 also scripts/keep_awake.sh       (sections 2 and 4)
@@ -26,6 +27,8 @@ scripts/train_head.py
                          oof.csv, metrics.json, config.json and head_fold*.pt; add the row to experiments.md
   evaluate()             predictions and mean loss of a model on the validation fold
   aucs()                 AUC per label for a set of studies (skips a label with only one class)
+  accs()                 accuracy per label at the 0.5 threshold for a set of studies (shown on the dashboard; AUC
+                         decides)
   refresh_dashboard()    rebuild runs/dashboard.html in the background; can never stop training
   (at the end it also prints analysis_text() from src/knee/dashboard.py: see section 4)
 
@@ -93,11 +96,18 @@ src/knee/dashboard.py
   collect()             pick the reference run and gather every section
   clean()               make the numbers safe to store as JSON
   verdicts()            read Adopted / Rejected / Current reference from experiments.md
-  runs_section()        one row per run: scores, difference from the reference, learning curve, progress
+  runs_section()        one row per run: scores, difference from the reference, learning curve, progress, accuracy
+                        and the path for the 3D view
+  read_cache()          a run's dash_cache.json (the slow results kept between builds); an unreadable one is rebuilt
   head_params()         number of weights in a run's head
   compact_history()     validation AUC per epoch, per fold
   greeks()              a run's learning-curve delta (AUC gained per epoch) and gamma (change in delta), and the
                         epoch from which it is flat
+  path3d()              a run's path for the 3D view: per epoch the validation AUC and accuracy (mean over the
+                        folds that reached it) with that epoch's delta and gamma
+  macro_acc()           accuracy at the 0.5 threshold of a run's out-of-fold predictions against the report labels
+                        (report-only studies, mean over the 12 labels), for runs from before train_head.py stored it
+  stored_acc()          a finished run's stored accuracy (metrics.json, else the dashboard cache), for analysis_text()
   config_groups()       group runs into configs (same settings, different seeds)
   config_of()           the settings that define a config (everything except the seed)
   best_group()          the current best config (the auto-improve base)
@@ -110,14 +120,26 @@ src/knee/dashboard.py
                         report for each label and for the macro
   beta(), boot_beta()   beta = covariance / variance (how much one score moves when another moves by 1), and
                         the same with a 90% interval
+  same_labels()         the configs trained on the current best config's labels (betas_section and plane_section)
+  plane_section()       the 3D view's plane across configs: accuracy = alpha + beta_auc * report AUC + beta_time *
+                        training minutes, by least squares, with r2 and a 90% interval for both betas
+  train_minutes()       a run's training minutes with the pauses taken out (median epoch time x epochs trained)
   cliff(), boot_diff(), macro(), auc(), truth()   as in section 3
   reference_section()   the reference model per label: AUC with intervals, ROC curves, right vs left knee
   boot_labels()         AUC per label with a 90% interval
   data_section()        counts of studies, slices, folds, label prevalence, scanners, knee side, feature caches
   normalise_vendor()    tidy the scanner maker's name
   efficiency_section()  estimated runtime of a submission
-  analysis_text()       one run's statistical analysis as text for the terminal: its seeds, Cliff's delta
+  analysis_text()       one run's statistical analysis as text for the terminal: its seeds, accuracy, Cliff's delta
                         against the current best, delta and gamma, betas and per-label scores
+
+scripts/graphs.py  (every chart on its own: graphs/*.png and the graphs window, runs/dashboard.html?graphs)
+  main()            read the options; rebuild the dashboard, save the PNGs, open the window with --open
+  save()            open runs/dashboard.html?graphs&export in headless Chrome and save each chart card as
+                    graphs/NN-<chart>[-<view>].png (every view of the 3D chart and the heat map), plus graphs/README.md
+  Chrome            headless Google Chrome driven over the DevTools protocol on a pipe: call(), wait(), js(), png(),
+                    close()
+  open_window()     the graphs page in a Chrome app window (no tabs or address bar)
 
 src/knee/results.py
   load_runs()           one row per run in runs/, from args.json, metrics.json and history.jsonl
@@ -168,26 +190,6 @@ scripts/review.py
 
 src/knee/head.py:      Head.from_config(), Head.forward(), fourier(), Studies (as in section 2)
 src/knee/features.py:  load_encoder() loads the frozen DINOv2 encoder; encode() turns slices into tokens
-
-
-6. EXTERNAL SCAN: start/4_run_external.command -> scripts/external_study.py, then scripts/review.py --external
----------------------------------------------------------------------------------------------------
-scripts/external_study.py  (the model on a scan from outside the competition)
-  main()               read the options, run every step below, write results/ and open the three graphs
-  unpack()             extract the zips in dicom/
-  scan()               find the MR series in the DICOM download and describe each one
-  orientation()        read a series' image orientation from its header
-  plane_of()           orientation -> Sagittal, Coronal or Axial
-  fat_suppressed()     decide from the header whether a series is fat-suppressed
-  link_series()        lay the series out in the folder layout the preprocessing reads
-  pick_slots()         choose the series for each of the four slots (with the --slot overrides)
-  load_heads()         load the trained heads (the packaged submission model, a run, or an ensemble)
-  member_runs()        the training runs those heads came from
-  predict()            probability per finding, and how much each slice moved it
-  reference_scores()   the training knees' scores, to say where this knee ranks among them
-  truth_summary()      do the findings the radiologist reported rank above the ones ruled out?
-  write_report()       write results/report.html; png(), strip_svg() and ordinal() are its helpers
-  scan_pictures(), load_pictures(), choose_pictures()   only for a picture export (PNG/JPEG) instead of DICOM
 
 scripts/external_graphs.py  (the three graphs opened in Preview)
   write_graphs()             draw and save the three graphs
