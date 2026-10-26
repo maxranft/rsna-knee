@@ -255,7 +255,7 @@ scripts/laterality.py --feats data/features/dinov2s
   ~1.5 min. Needs data/pp-slots/slots_shard{0,1,2}.csv (preprocess kernel outputs, fetched 2026-09-29).
 
 scripts/make_folds.py
-  Fixed 5-fold split -> meta/folds.csv. Committed. NEVER regenerate: every result depends on these folds.
+  Fixed 5-fold split -> meta/folds.csv. Local only (git-ignored: competition study IDs). NEVER regenerate: every result depends on these folds.
 
 scripts/review.py  [--demo]
   Local browser review tool (http://127.0.0.1:8765): grade predictions per study and finding -> meta/reviews.csv.

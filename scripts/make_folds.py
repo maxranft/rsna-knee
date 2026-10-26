@@ -1,4 +1,4 @@
-"""Fixed 5-fold split over all training studies -> meta/folds.csv (committed; never regenerate).
+"""Fixed 5-fold split over all training studies -> meta/folds.csv (local only, git-ignored: it lists competition study IDs; never regenerate).
 
 Gold studies (the 58 with labels) are split with multilabel stratification so every fold gets
 positives of each label; report-only studies are split at random. CV scores are computed on the

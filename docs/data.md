@@ -39,7 +39,7 @@ Kaggle. The DICOM findings come from the `rsna-knee-dicom-survey` kernel ([../ka
 - Gold subset: about half English, and the rest a similar mix.
 
 ## Folds
-`meta/folds.csv` (committed, never regenerate) is made by `scripts/make_folds.py`, seed 42:
+`meta/folds.csv` (local only and git-ignored, since it lists competition study IDs; never regenerate) is made by `scripts/make_folds.py`, seed 42:
 - 5 folds, about 881 studies each.
 - The gold studies are multilabel-stratified: 10–13 per fold, with at least 1 positive per label per fold.
 - The report-only studies are split at random.
