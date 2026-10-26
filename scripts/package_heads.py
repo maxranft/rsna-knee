@@ -6,6 +6,7 @@ Nothing is uploaded; the upload command is printed.
     python scripts/package_heads.py runs/ens-<id>                   # the members of an ensemble run
     python scripts/package_heads.py runs/mix-<id>                   # an ensemble + its rank_mix.json (scripts/rank_mix.py)
     python scripts/package_heads.py runs/mix-<id> --tta             # + tta.json: leave-one-slot-out TTA in the kernel
+    python scripts/package_heads.py runs/mix-<id> --name=rsna-knee-heads-eff   # a second dataset (build/<name>)
     -> build/rsna-knee-heads/{head_fold<f>[_m<i>].pt, config.json, pca.npz (if PCA), dataset-metadata.json}
 Files stay flat: the Kaggle CLI skips subfolders when uploading a dataset.
 
@@ -23,7 +24,8 @@ ARCH = ("tokens", "dim", "d", "layers", "labels", "feats", "aux", "slot_proj", "
 OPTIONAL = {"aux": [], "slot_proj": False, "local": False}  # absent from older configs
 runs, mix = [], None
 tta = "--tta" in sys.argv  # the kernel then averages each head over leave-one-slot-out variants (scripts/tta_oof.py)
-for a in [a for a in sys.argv[1:] if a != "--tta"]:
+name = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--name=")), "rsna-knee-heads")  # dataset slug
+for a in [a for a in sys.argv[1:] if not a.startswith("--")]:
     d = Path(a)
     if d.name.startswith("mix-"):  # scripts/rank_mix.py: the source's heads plus the rank mix the kernel applies
         mix = json.loads((d / "args.json").read_text())["mix"]
@@ -41,7 +43,7 @@ for r, c in zip(runs, cfgs):
     if c.get("canon"):
         sys.exit(f"{r.name} mirrors left knees (--canon); the submission kernel does not implement laterality yet")
 
-out = ROOT / "build/rsna-knee-heads"
+out = ROOT / "build" / name
 shutil.rmtree(out, ignore_errors=True)
 out.mkdir(parents=True)
 n_heads = 0
@@ -63,7 +65,7 @@ if mix:
     (out / "rank_mix.json").write_text(json.dumps(mix, indent=1))
 (out / "SOURCE_RUN.txt").write_text("\n".join(r.name for r in runs) + "\n")
 (out / "dataset-metadata.json").write_text(json.dumps({
-    "title": "rsna-knee-heads", "id": "maxranft/rsna-knee-heads", "licenses": [{"name": "CC0-1.0"}]}, indent=1))
+    "title": name, "id": f"maxranft/{name}", "licenses": [{"name": "CC0-1.0"}]}, indent=1))
 print(f"packaged {', '.join(r.name for r in runs)}: {n_heads} heads, pca {'yes' if pca.exists() else 'no'}, rank mix {mix or 'none'}, tta {tta} -> {out.relative_to(ROOT)}")
-print("upload (first time):  .venv/bin/kaggle datasets create -p build/rsna-knee-heads")
-print("upload (new version): .venv/bin/kaggle datasets version -p build/rsna-knee-heads -m '<run id>'")
+print(f"upload (first time):  .venv/bin/kaggle datasets create -p build/{name}")
+print(f"upload (new version): .venv/bin/kaggle datasets version -p build/{name} -m '<run id>'")
