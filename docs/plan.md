@@ -1,5 +1,9 @@
 # Plan and decisions so far (2026-09-22, strategy added 2026-09-23)
 
+> **Outcome (2026-10-25):** the competition closed on 2026-10-22. Final score: public 0.796, private 0.783, no medal.
+> The efficiency submission was not entered. S1 reached 0.861 gold agreement (the target was ≥ 0.95 on the easy labels). S3 delivered fast
+> iteration but capped accuracy. S4 was built but never submitted. See [postmortem.md](postmortem.md).
+
 Carried over from the planning conversation. The research behind it is in
 [../reference/STUDY.md](../reference/STUDY.md), [labels.md](labels.md) and [landscape.md](landscape.md).
 

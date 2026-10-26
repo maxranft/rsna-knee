@@ -4,6 +4,10 @@ Max's entry to the Kaggle competition https://www.kaggle.com/competitions/rsna-k
 12 binary findings per knee MRI study, scored by macro ROC AUC. Offline Kaggle notebook, ≤9 h, about
 1,300 test studies. **Entry deadline 2026-10-15, final submission 2026-10-22.**
 
+**Status: closed (2026-10-22).** Final: public 0.796 / private 0.783, no medal; the efficiency track was not
+entered. See [docs/postmortem.md](docs/postmortem.md). Local `data/` was deleted 2026-10-25 (rebuild from the
+Kaggle kernels, see the post-mortem), so scripts that read it will fail until it is fetched again.
+
 A follow-on to Max's earlier diabetic-retinopathy project (APTOS 2019, EfficientNet-B0, FastAPI
 triage app; see the Obsidian vault chat "2026-08-30 - Re-run the training scripts").
 
